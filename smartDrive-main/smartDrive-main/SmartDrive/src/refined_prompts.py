@@ -210,7 +210,37 @@ class RefinedDriveSmartWorkflow:
             'answer': result['answer'],
             'sources': result['sources']
         }
+    def query(self, question: str, prompt_type_key: str = "general"):
+        """
+        Dashboard-friendly API.
+        Routes to the right refined prompt and returns a consistent result shape.
+        """
 
+        key = (prompt_type_key or "general").lower().strip()
+
+        if key == "scenario":
+            prompt = REFINED_PROMPT_2
+            input_var = "scenario"
+        elif key == "comparative":
+            prompt = REFINED_PROMPT_3
+            input_var = "question"
+        else:
+            prompt = REFINED_PROMPT_1
+            input_var = "question"
+
+        result = self.query_with_prompt(question, prompt, input_var)
+
+        # Try to infer jurisdiction from retrieved metadata (if your docs have it)
+        jurisdictions = set()
+        for doc in result.get("sources", []):
+            meta = getattr(doc, "metadata", {}) or {}
+            j = meta.get("jurisdiction") or meta.get("state")
+            if j:
+                jurisdictions.add(str(j).strip())
+
+        result["detected_jurisdiction"] = sorted(jurisdictions) if jurisdictions else "All"
+
+        return result
 # ============================================================================
 # COMPARISON TESTING
 # ============================================================================

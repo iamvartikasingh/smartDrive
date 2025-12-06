@@ -1,91 +1,159 @@
 """
-DriveSmart AI - Dashboard WITH SECURITY
-Team 3: Siddhi Dhamale, Siddhesh Sawant, Vartika Singh, Prishita Patel
-Northeastern University - INFO 7375
+DriveSmart AI - Modern Chatbot Interface (High-Tech)
+Chat-first UI with Security + Analytics + Supported States
+Save as: dashboard.py
 """
 
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
 import time
 import os
 import sys
 from pathlib import Path
 import sqlite3
-import chromadb
 from dotenv import load_dotenv
 import uuid
+import inspect
+import re
+import html
 
+# -------------------- ENV LOADER --------------------
+def load_env():
+    candidates = [
+        Path(__file__).parent / ".env",
+        Path(__file__).parent / "SmartDrive" / ".env",
+        Path(__file__).parent / "SmartDrive" / "src" / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for p in candidates:
+        if p.exists():
+            load_dotenv(p, override=True)
+            return p
+    return None
 
-# Load environment variables
-load_dotenv(Path(__file__).parent / ".env", override=True)
-# Add src to path for imports
-sys.path.append(str(Path(__file__).parent.parent.parent/'SmartDrive'/ 'src'))
+load_env()
 
-# ========== SECURITY MODULES ==========
+# -------------------- PATH SETUP --------------------
+ROOT = Path(__file__).resolve().parent
+sys.path.append(str(ROOT / "SmartDrive" / "src"))
+
+# -------------------- SECURITY MODULES --------------------
 try:
     from SmartDrive.security.input_validator import PromptSecurityValidator
     from SmartDrive.security.output_validator import ResponseValidator
     from SmartDrive.security.behavioral_monitor import BehavioralMonitor
     SECURITY_ENABLED = True
-except ImportError as e:
+except ImportError:
     SECURITY_ENABLED = False
 
-# Import other modules
+# -------------------- CORE MODULES --------------------
 try:
     from SmartDrive.src.refined_prompts import RefinedDriveSmartWorkflow
     from SmartDrive.src.vector_store import CloudTrafficLawVectorStore
-    from SmartDrive.src.langraph import build_traffic_law_graph
-    from SmartDrive.src.langsmith_monitoring import DriveSmartPerformanceMonitor
     MODULES_LOADED = True
 except ImportError:
     MODULES_LOADED = False
 
-# Page config
+# -------------------- PAGE CONFIG --------------------
 st.set_page_config(
-    page_title="DriveSmart AI - Secure",
+    page_title="DriveSmart AI Chat",
     page_icon="🚗",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# Database Manager Class (same as yours)
+# -------------------- SESSION STATE (ONLY ONCE) --------------------
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
+if "processing" not in st.session_state:
+    st.session_state.processing = False
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": "Hi! I’m DriveSmart AI. Ask me anything about traffic laws. I’ll respond with clear guidance based on the indexed jurisdictions.",
+            "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "All"}
+        }
+    ]
+
+# -------------------- LEGACY HTML CLEANUP --------------------
+TAG_RE = re.compile(r"<[^>]+>")
+
+def sanitize_text(text: str) -> str:
+    """Always-safe cleanup for any legacy HTML or accidental UI dumps."""
+    if not text:
+        return ""
+
+    # Normalize line breaks from old HTML
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+
+    # Remove ANY html tags
+    text = TAG_RE.sub("", text)
+
+    # Unescape entities (&lt; etc)
+    text = html.unescape(text)
+
+    # Clean excessive newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def normalize_messages_once():
+    cleaned = []
+    for m in st.session_state.messages:
+        raw = m.get("content", "") or ""
+        m["content"] = sanitize_text(raw)
+        cleaned.append(m)
+    st.session_state.messages = cleaned
+
+
+# ✅ Run migration only once per session
+if "messages_migrated_v3" not in st.session_state:
+    normalize_messages_once()
+    st.session_state.messages_migrated_v3 = True
+# -------------------- DATABASE MANAGER --------------------
 class DatabaseManager:
     def __init__(self):
-        from chromadb import HttpClient
-        from chromadb.utils import embedding_functions
-        
-        self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=os.getenv('OPENAI_API_KEY'),
-            model_name="text-embedding-ada-002"
-        )
-        
-        self.chroma_client = HttpClient(
-            host="api.trychroma.com",
-            port=443,
-            ssl=True,
-            headers={
-                "Authorization": f"Bearer {os.getenv('CHROMA_API_KEY')}",
-                "X-Chroma-Token": os.getenv('CHROMA_API_KEY')
-            },
-            tenant=os.getenv('CHROMA_TENANT'),
-            database=os.getenv('CHROMA_DB')
-        )
-        
+        # ---- Chroma Cloud collection ----
+        self.db_connected = False
+        self.traffic_collection = None
+
         try:
+            from chromadb import HttpClient
+            from chromadb.utils import embedding_functions
+
+            self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
+                api_key=os.getenv('OPENAI_API_KEY'),
+                model_name="text-embedding-3-small"
+            )
+
+            self.chroma_client = HttpClient(
+                host="api.trychroma.com",
+                port=443,
+                ssl=True,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('CHROMA_API_KEY')}",
+                    "X-Chroma-Token": os.getenv('CHROMA_API_KEY')
+                },
+                tenant=os.getenv('CHROMA_TENANT'),
+                database=os.getenv('CHROMA_DB')
+            )
+
             self.traffic_collection = self.chroma_client.get_collection(
                 "traffic_laws",
                 embedding_function=self.embedding_function
             )
             self.db_connected = True
-        except Exception as e:
+        except Exception:
             self.db_connected = False
-        
+
+        # ---- SQLite for analytics ----
         self.sqlite_conn = sqlite3.connect('drivesmart_analytics.db', check_same_thread=False)
         self._init_sqlite_tables()
-    
+
     def _init_sqlite_tables(self):
         cursor = self.sqlite_conn.cursor()
         cursor.execute('''
@@ -101,45 +169,7 @@ class DatabaseManager:
             )
         ''')
         self.sqlite_conn.commit()
-    
-    def search_traffic_laws(self, query, jurisdiction=None, n_results=10):
-        if not self.db_connected:
-            return None
-        
-        try:
-            if jurisdiction and jurisdiction != "All":
-                enhanced_query = f"{query} {jurisdiction}"
-            else:
-                enhanced_query = query
-            
-            results = self.traffic_collection.query(
-                query_texts=[enhanced_query],
-                n_results=n_results * 2
-            )
-            
-            if jurisdiction and jurisdiction != "All" and results['documents'][0]:
-                filtered_docs = []
-                filtered_meta = []
-                
-                for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-                    doc_jurisdiction = str(meta.get('Jurisdiction', '')).strip()
-                    
-                    if (jurisdiction.lower() == doc_jurisdiction.lower() or 
-                        jurisdiction.lower() in doc_jurisdiction.lower()):
-                        filtered_docs.append(doc)
-                        filtered_meta.append(meta)
-                
-                if filtered_docs:
-                    results['documents'] = [filtered_docs[:n_results]]
-                    results['metadatas'] = [filtered_meta[:n_results]]
-            else:
-                results['documents'] = [results['documents'][0][:n_results]]
-                results['metadatas'] = [results['metadatas'][0][:n_results]]
-            
-            return results
-        except Exception as e:
-            return None
-    
+
     def save_query(self, query_data):
         cursor = self.sqlite_conn.cursor()
         cursor.execute('''
@@ -147,302 +177,662 @@ class DatabaseManager:
             (query, response, jurisdiction, analysis_type, response_time, sources_count)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (
-            query_data['query'],
-            query_data['response'][:1000],
-            query_data['jurisdiction'],
-            query_data['analysis_type'],
-            query_data['response_time'],
-            query_data.get('sources_count', 0)
+            query_data.get('query', ''),
+            (query_data.get('response', '') or '')[:1000],
+            query_data.get('jurisdiction', 'All'),
+            query_data.get('analysis_type', 'general'),
+            float(query_data.get('response_time', 0.0)),
+            int(query_data.get('sources_count', 0))
         ))
         self.sqlite_conn.commit()
         return cursor.lastrowid
-    
+
     def get_stats(self):
         cursor = self.sqlite_conn.cursor()
-        
+
         today_stats = cursor.execute('''
             SELECT COUNT(*) as queries_today, AVG(response_time) as avg_response_time
             FROM query_history
             WHERE DATE(timestamp) = DATE('now', 'localtime')
         ''').fetchone()
-        
+
         total_stats = cursor.execute('''
-            SELECT COUNT(*) as total_queries, COUNT(DISTINCT jurisdiction) as jurisdictions_used
+            SELECT COUNT(*) as total_queries
             FROM query_history
         ''').fetchone()
-        
+
         laws_count = 24
-        if self.db_connected:
+        if self.db_connected and self.traffic_collection:
             try:
                 laws_count = self.traffic_collection.count()
-            except:
+            except Exception:
                 pass
-        
+
         return {
             'queries_today': today_stats[0] if today_stats else 0,
             'avg_response_time': today_stats[1] if today_stats and today_stats[1] else 2.1,
             'total_queries': total_stats[0] if total_stats else 0,
-            'jurisdictions_used': total_stats[1] if total_stats else 0,
             'laws_indexed': laws_count
         }
 
-# Initialize
+    def get_supported_jurisdictions(self, limit=2000):
+        fallback = ["Massachusetts", "California", "New York", "Texas", "Florida"]
+
+        if not self.db_connected or not self.traffic_collection:
+            return fallback
+
+        try:
+            data = self.traffic_collection.get(include=["metadatas"], limit=limit)
+            metas = data.get("metadatas", []) or []
+
+            flattened = []
+            for m in metas:
+                if isinstance(m, list):
+                    flattened.extend(m)
+                elif isinstance(m, dict):
+                    flattened.append(m)
+
+            jurisdictions = sorted({
+                str(m.get("jurisdiction")).strip()
+                for m in flattened
+                if m and m.get("jurisdiction")
+            })
+
+            return jurisdictions if jurisdictions else fallback
+        except Exception:
+            return fallback
+
+# -------------------- CACHED RESOURCES --------------------
 @st.cache_resource
 def get_managers():
     db_manager = DatabaseManager()
-    
+
     if SECURITY_ENABLED:
         input_validator = PromptSecurityValidator()
         output_validator = ResponseValidator()
         behavioral_monitor = BehavioralMonitor()
         return db_manager, input_validator, output_validator, behavioral_monitor
-    
+
     return db_manager, None, None, None
+
+@st.cache_resource
+def get_vectorstore():
+    vsm = CloudTrafficLawVectorStore()
+    return vsm.get_existing_vectorstore("traffic_laws")
+
 @st.cache_resource
 def get_workflow():
-    from SmartDrive.src.vector_store import CloudTrafficLawVectorStore, ModernDriveSmartWorkflow
+    init_params = list(inspect.signature(RefinedDriveSmartWorkflow.__init__).parameters)
 
-    vsm = CloudTrafficLawVectorStore()
-    vectorstore = vsm.get_existing_vectorstore("traffic_laws")
-    workflow = ModernDriveSmartWorkflow(vectorstore)
-    return workflow
+    if len(init_params) <= 1:
+        return RefinedDriveSmartWorkflow()
+
+    vectorstore = get_vectorstore()
+    return RefinedDriveSmartWorkflow(vectorstore)
+
 db_manager, input_validator, output_validator, behavioral_monitor = get_managers()
-stats = db_manager.get_stats()
+workflow = get_workflow()
+supported_states = db_manager.get_supported_jurisdictions()
 
-# Custom CSS (same as yours)
+# -------------------- MODERN CSS --------------------
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 2rem;
-        border-radius: 1rem;
-        text-align: center;
-        margin-bottom: 2rem;
+    .stDeployButton {display: none;}
+
+    :root{
+        --accent-red: #BF092F;
+        --navy-deep: #132440;
+        --blue-steel: #16476A;
+        --teal: #3B9797;
+
+        --bg-0: #050607;
+        --bg-1: #0A0D12;
+        --bg-2: #0D1117;
+
+        --glass-1: rgba(255,255,255,0.06);
+        --glass-2: rgba(255,255,255,0.09);
+        --border-1: rgba(255,255,255,0.08);
+
+        --text-strong: #F8FAFC;
+        --text-mid: rgba(248,250,252,0.78);
+        --text-dim: rgba(248,250,252,0.55);
+
+        --shadow-soft: 0 8px 28px rgba(0,0,0,0.35);
+        --shadow-pop: 0 10px 30px rgba(0,0,0,0.45);
     }
-    
-    .metric-card {
-        background: white;
-        border-radius: 0.75rem;
-        padding: 1.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        text-align: center;
+
+    .stApp {
+        background:
+            radial-gradient(circle at 12% 12%, rgba(59,151,151,0.16), transparent 38%),
+            radial-gradient(circle at 88% 20%, rgba(22,71,106,0.16), transparent 42%),
+            radial-gradient(circle at 40% 90%, rgba(191,9,47,0.10), transparent 45%),
+            linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%) !important;
+        color: var(--text-strong);
     }
-    
-    .metric-value {
-        font-size: 2.5rem;
+
+    section[data-testid="stSidebar"]{
+        background:
+            linear-gradient(180deg, rgba(19,36,64,0.35), rgba(5,6,7,0.9)) !important;
+        border-right: 1px solid var(--border-1);
+    }
+
+    .chat-header {
+        background: linear-gradient(
+            135deg,
+            rgba(22,71,106,0.18),
+            rgba(59,151,151,0.12),
+            rgba(19,36,64,0.18)
+        );
+        backdrop-filter: blur(10px);
+        border-radius: 18px;
+        padding: 1.6rem 1.4rem;
+        margin-bottom: 1rem;
+        border: 1px solid var(--border-1);
+        text-align: center;
+        box-shadow: var(--shadow-soft);
+    }
+
+    .chat-title {
+        font-size: 2.4rem;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        color: var(--text-strong);
+        margin-bottom: 0.25rem;
+    }
+
+    .chat-subtitle {
+        color: var(--text-mid);
+        font-size: 1.5rem;
+    }
+
+    .supported-strip {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.85rem 1rem;
+        margin: 0 0 1.1rem 0;
+        border-radius: 14px;
+        background: var(--glass-1);
+        border: 1px solid var(--border-1);
+        box-shadow: var(--shadow-soft);
+    }
+
+    .supported-label {
         font-weight: 700;
-        color: #667eea;
+        color: var(--text-mid);
+        margin-right: 0.25rem;
     }
-    
-    .security-alert {
-        background: #fee2e2;
-        border-left: 4px solid #ef4444;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
+
+    .state-pill {
+        padding: 0.25rem 0.7rem;
+        border-radius: 999px;
+        font-size: 1.05rem;
+        color: #dff7f7;
+        background: rgba(59,151,151,0.18);
+        border: 1px solid rgba(59,151,151,0.35);
+    }
+
+    .state-more{
+        padding: 0.25rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        color: var(--text-mid);
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border-1);
+    }
+/* ------------------ CHAT ROWS (NO WRAPPER) ------------------ */
+.message-row{
+    display: flex;
+    width: 100%;
+    margin: 0.9rem 0;
+}
+
+.message-row.user{
+    justify-content: flex-end;
+}
+
+.message-row.ai{
+    justify-content: flex-start;
+}
+
+/* ------------------ USER BUBBLE ------------------ */
+.user-message{
+    background: linear-gradient(135deg, var(--teal), var(--blue-steel)) !important;
+    color: white;
+    padding: 1rem 1.2rem;
+    border-radius: 16px 16px 4px 16px;
+    max-width: 70%;
+    box-shadow: 0 6px 18px rgba(191,9,47,0.35);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ------------------ AI BUBBLE ------------------ */
+.ai-message{
+    background: linear-gradient(
+        135deg,
+        rgba(22,71,106,0.22),
+        rgba(19,36,64,0.25)
+    );
+    color: var(--text-strong);
+    padding: 1.1rem 1.2rem;
+    border-radius: 16px 16px 16px 4px;
+    max-width: 82%;
+    border-left: 4px solid var(--teal);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+}
+
+/* Meta stays same */
+.message-meta {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 0.55rem;
+    display: flex;
+    gap: 0.9rem;
+    align-items: center;
+}
+    # .chat-container {
+    #     background: linear-gradient(
+    #         180deg,
+    #         rgba(255,255,255,0.05),
+    #         rgba(255,255,255,0.03)
+    #     );
+    #     backdrop-filter: blur(10px);
+    #     border-radius: 18px;
+    #     padding: 1.25rem 1.25rem 0.6rem 1.25rem;
+    #     border: 1px solid var(--border-1);
+    #     box-shadow: var(--shadow-pop);
+
+    #     height: calc(100vh - 460px);
+    #     min-height: 280px;
+    #     overflow-y: auto;
+    #     margin-bottom: 1rem;
+    # }
+
+    .user-message,
+    .ai-message {
+        font-size: 1.5rem;
+        line-height: 1.6;
+    }
+
+    .user-message {
+        background: linear-gradient(135deg, var(--teal), var(--blue-steel)) !important;
+        color: white;
+        padding: 1rem 1.2rem;
+        border-radius: 16px 16px 4px 16px;
+        margin: 0.9rem 0 0.9rem auto;
+        max-width: 70%;
+        float: right;
+        clear: both;
+        box-shadow: 0 6px 18px rgba(191,9,47,0.35);
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .ai-message {
+        background: linear-gradient(
+            135deg,
+            rgba(22,71,106,0.22),
+            rgba(19,36,64,0.25)
+        );
+        color: var(--text-strong);
+        padding: 1.1rem 1.2rem;
+        border-radius: 16px 16px 16px 4px;
+        margin: 0.9rem 0;
+        max-width: 82%;
+        border-left: 4px solid var(--teal);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+    }
+
+    .message-meta {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        margin-top: 0.55rem;
+        display: flex;
+        gap: 0.9rem;
+        align-items: center;
+    }
+
+    .message-clear {
+        clear: both;
+        content: "";
+        display: table;
+    }
+
+    .stTextArea textarea {
+        background: rgba(255,255,255,0.06) !important;
+        border: 1px solid var(--border-1) !important;
+        border-radius: 12px !important;
+        color: var(--text-strong) !important;
+        font-size: 1.3rem !important;
+        padding: 0.95rem !important;
+        caret-color: var(--teal) !important;
+    }
+
+    .stTextArea textarea::placeholder{
+        color: rgba(248,250,252,0.45) !important;
+    }
+
+    .stTextArea textarea:focus {
+        border-color: rgba(59,151,151,0.6) !important;
+        box-shadow: 0 0 0 3px rgba(59,151,151,0.18) !important;
+    }
+
+    .stButton button {
+        background: linear-gradient(135deg, var(--accent-red), #8c0722);
+        color: white !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+        border-radius: 10px !important;
+        padding: 0.82rem 1.15rem !important;
+        font-weight: 700 !important;
+        font-size: 1.5rem !important;
+        transition: all 0.25s ease !important;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.25) !important;
+    }
+
+    .stButton button:hover {
+        transform: translateY(-1px) !important;
+        filter: brightness(1.08) !important;
+        box-shadow: 0 10px 26px rgba(0,0,0,0.35) !important;
+    }
+
+    .stat-card {
+        background: var(--glass-1);
+        border-radius: 14px;
+        padding: 1.1rem;
+        margin-bottom: 0.8rem;
+        border: 1px solid var(--border-1);
+        text-align: center;
+        box-shadow: var(--shadow-soft);
+    }
+
+    .stat-value {
+        font-size: 1.9rem;
+        font-weight: 800;
+        color: #dff7f7;
+    }
+
+    .stat-label {
+        color: var(--text-dim);
+        font-size: 1rem;
+        margin-top: 0.2rem;
+    }
+
+    .security-badge {
+        display: inline-block;
+        background: rgba(59,151,151,0.16);
+        color: #dff7f7;
+        padding: 0.45rem 0.85rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        border: 1px solid rgba(59,151,151,0.35);
+        margin-bottom: 0.5rem;
+    }
+
+    .security-badge.warning {
+        background: rgba(191,9,47,0.12);
+        color: #ffb3c2;
+        border-color: rgba(191,9,47,0.35);
+    }
+
+    hr {
+        border: none !important;
+        border-top: 1px solid rgba(255,255,255,0.08) !important;
+    }
+
+    div[data-testid="stButton"] button[kind="primary"] {
+        min-height: 52px !important;
+        padding: 0.9rem 1.1rem !important;
+        font-size: 1.05rem !important;
+        border-radius: 12px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Session state
-if 'session_id' not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if 'last_response' not in st.session_state:
-    st.session_state.last_response = None
+# -------------------- SIDEBAR --------------------
+with st.sidebar:
+    st.markdown('<div class="chat-header">', unsafe_allow_html=True)
+    st.markdown('<h2 style="color: white; margin: 0;">Dashboard</h2>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# Main Header
-security_status = "🛡️ Protected" if SECURITY_ENABLED else "⚠️ Unprotected"
-st.markdown(f"""
-<div class="main-header">
-    <h1 class="header-title">🚗 DriveSmart AI Dashboard</h1>
-    <p class="header-subtitle">AI-Powered Traffic Law Assistant | {security_status}</p>
-    <div style="margin-top: 1rem;">
-        <span class="tech-badge">🔗 LangChain</span>
-        <span class="tech-badge">📊 LangGraph</span>
-        <span class="tech-badge">☁️ ChromaDB</span>
-        <span class="tech-badge">{security_status}</span>
+    stats = db_manager.get_stats()
+
+    st.markdown(f"""
+    <div class="stat-card">
+        <div class="stat-value">{stats['queries_today']}</div>
+        <div class="stat-label">Queries Today</div>
     </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="stat-card">
+        <div class="stat-value">{stats['avg_response_time']:.1f}s</div>
+        <div class="stat-label">Avg Response Time</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="stat-card">
+        <div class="stat-value">{stats['laws_indexed']}</div>
+        <div class="stat-label">Laws Indexed</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if SECURITY_ENABLED:
+        st.markdown('<div class="security-badge">🛡️ Security Active</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="security-badge warning">⚠️ Security Disabled</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown('<h3 style="color: white;">💡 Quick Prompts</h3>', unsafe_allow_html=True)
+
+    quick_prompts = [
+        "What is the basic speed law in California?",
+        "Can I turn right on red in New York?",
+        "What happens if I run a red light?",
+        "DUI laws in Massachusetts",
+        "Using a phone while driving penalties"
+    ]
+
+    for prompt in quick_prompts:
+        if st.button(prompt, key=f"quick_{prompt}", use_container_width=True):
+            st.session_state.quick_prompt = prompt
+
+    st.markdown("---")
+
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = st.session_state.messages[:1]
+        st.session_state.messages_migrated_v3 = True  # keep as migrated
+        st.rerun()
+
+# -------------------- HEADER --------------------
+st.markdown("""
+<div class="chat-header">
+    <div class="chat-title">🚗 DriveSmart AI</div>
+    <div class="chat-subtitle">Your AI-Powered Traffic Law Assistant</div>
 </div>
 """, unsafe_allow_html=True)
 
-# Top Metrics
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+# -------------------- SUPPORTED STATES STRIP --------------------
+def render_state_pills(items):
+    items = items or []
+    pills = "".join(f'<span class="state-pill">{s}</span>' for s in items[:12])
+    more = f'<span class="state-more">+{len(items)-12} more</span>' if len(items) > 12 else ""
+    return pills + more
+
+st.markdown(
+    f"""
+    <div class="supported-strip">
+        <span class="supported-label">Supported States:</span>
+        {render_state_pills(supported_states)}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# -------------------- CHAT WINDOW --------------------
+def render_chat(messages):
+    for message in messages:
+        role = message.get("role")
+        raw_content = message.get("content", "")
+        metadata = message.get("metadata", {})
+
+        clean = sanitize_text(raw_content)
+        content = html.escape(clean).replace("\n", "<br/>")
+
+        if role == "user":
+            st.markdown(
+                f"""
+                <div class="message-row user">
+                    <div class="user-message">
+                        <strong>You</strong><br/>
+                        {content}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            sources = metadata.get("sources_count", 0)
+            response_time = metadata.get("response_time", 0.0)
+            jurisdiction = metadata.get("jurisdiction", "All")
+
+            st.markdown(
+                f"""
+                <div class="message-row ai">
+                    <div class="ai-message">
+                        <strong>🤖 DriveSmart AI</strong><br/>
+                        {content}
+                        <div class="message-meta">
+                            <span>⏱️ {response_time:.2f}s</span>
+                            <span>📚 {sources} sources</span>
+                            <span>📍 {jurisdiction}</span>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+render_chat(st.session_state.messages)
+
+# -------------------- INPUT ROW --------------------
+col1, col2 = st.columns([5, 1])
 
 with col1:
-    st.markdown("""<div class="metric-card"><div class="metric-value">94%</div><div class="metric-label">Accuracy</div></div>""", unsafe_allow_html=True)
-with col2:
-    st.markdown(f"""<div class="metric-card"><div class="metric-value">{stats['avg_response_time']:.1f}s</div><div class="metric-label">Avg Response</div></div>""", unsafe_allow_html=True)
-with col3:
-    st.markdown("""<div class="metric-card"><div class="metric-value">97%</div><div class="metric-label">Completeness</div></div>""", unsafe_allow_html=True)
-with col4:
-    st.markdown(f"""<div class="metric-card"><div class="metric-value">{stats['queries_today']}</div><div class="metric-label">Queries Today</div></div>""", unsafe_allow_html=True)
-with col5:
-    st.markdown(f"""<div class="metric-card"><div class="metric-value">{stats['laws_indexed']}</div><div class="metric-label">Laws Indexed</div></div>""", unsafe_allow_html=True)
-with col6:
-    status_text = "Protected" if SECURITY_ENABLED else "Monitor"
-    status_color = "#22c55e" if SECURITY_ENABLED else "#f59e0b"
-    st.markdown(f"""<div class="metric-card"><div style="font-size: 1.5rem; color: {status_color};">🛡️ {status_text}</div><div class="metric-label">Security</div></div>""", unsafe_allow_html=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# Main Content
-col_left, col_center = st.columns([1.2, 2.8])
-
-with col_left:
-    st.markdown('<h2>🔍 Query Interface</h2>', unsafe_allow_html=True)
-    
-    if SECURITY_ENABLED:
-        st.success("🛡️ Security Active")
-    else:
-        st.warning("⚠️ Security Disabled")
-    
-    query = st.text_area(
-        "Traffic law question",
-        height=200,
-        placeholder="Enter your traffic law question...",
-        key="query_input",
+    user_input = st.text_area(
+        "Ask a question",
+        placeholder="Type your traffic law question here...",
+        key="user_input",
+        height=90,
         label_visibility="collapsed"
-)
-    
-    jurisdiction = "All"
-    prompt_type = "General"
-    
-    submit = st.button("🚀 Get Answer", type="primary", use_container_width=True)
-    
-    # HANDLE SUBMIT WITH SECURITY
-    if submit and query:
-        
-        # ========== SECURITY VALIDATION ==========
-        if SECURITY_ENABLED and input_validator and behavioral_monitor:
-            with st.spinner("🛡️ Validating query security..."):
-                validation = input_validator.validate_input(query)
-                behavioral = behavioral_monitor.analyze_session(
-                    st.session_state.session_id,
-                    query,
-                    validation
-                )
-            
-            # CHECK IF BLOCKED
-            if not validation["is_safe"]:
-                risk_level = validation["risk_level"]
-                flags = validation.get("flags", [])
-                
-                # SHOW RED ALERT
-                st.markdown(f"""
-                <div class="security-alert">
-                    <h3>🚫 Query Blocked</h3>
-                    <p><strong>Risk Level:</strong> {risk_level}</p>
-                    <p><strong>Reason:</strong> Security validation detected potential issues.</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Show flags
-                with st.expander("🔍 Security Details"):
-                    for flag_type, detail in flags:
-                        st.warning(f"**{flag_type}**: {detail}")
-                
-                # Save and stop
-                query_data = {
-                    'query': query,
-                    'response': f"BLOCKED - {risk_level}",
-                    'jurisdiction': jurisdiction,
-                    'analysis_type': 'Security Block',
-                    'response_time': 0.0,
-                    'sources_count': 0
-                }
-                db_manager.save_query(query_data)
-                st.session_state.last_response = query_data
-                st.stop()
-            
-            # Check behavioral
-            if behavioral["action"] in ["RATE_LIMIT", "BLOCK"]:
-                st.error("⚠️ Too many queries - please slow down")
-                st.stop()
-            
-            # PASSED - show green
-            st.success("✅ Security validation passed")
-        
-        # ========== NORMAL PROCESSING ==========
-        with st.spinner("🔍 Searching traffic law database..."):
-            start_time = time.time()
-          
+    )
 
-            workflow = get_workflow()
-                          # Decide prompt type (simple rule)
-            ALLOWED_PROMPT_TYPES = {"general", "scenario", "comparative"}
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    send_button = st.button("Ask Now", use_container_width=True, type="primary")
 
+# Quick prompt trigger
+if "quick_prompt" in st.session_state:
+    user_input = st.session_state.quick_prompt
+    send_button = True
+    del st.session_state.quick_prompt
 
-            q_lower = query.lower()
-            
-            if "compare" in q_lower or "difference" in q_lower:
-                    prompt_type_key = "comparative"
-            elif "i was" in q_lower or "scenario" in q_lower:
-                    prompt_type_key = "scenario"
-            else:
-                    prompt_type_key = "general"
-            if prompt_type_key not in ALLOWED_PROMPT_TYPES:
-                prompt_type_key = "general"
+# -------------------- PROCESS MESSAGE --------------------
+if send_button and user_input and not st.session_state.processing:
+    st.session_state.processing = True
 
-            result = workflow.query(query, prompt_type_key)
+    st.session_state.messages.append({
+     "role": "user",
+     "content": sanitize_text(user_input)
+})
 
-                # ✅ One-line clean answer first
-            # ✅ Convert detected_jurisdiction to a DB-safe string
-            jur = result.get("detected_jurisdiction", "All")
-            if isinstance(jur, list):
-                jur = ", ".join(jur)
-            answer_text = result["answer"].strip()
+    # Security validation
+    if SECURITY_ENABLED and input_validator and behavioral_monitor:
+        validation = input_validator.validate_input(user_input)
+        behavioral = behavioral_monitor.analyze_session(
+            st.session_state.session_id,
+            user_input,
+            validation
+        )
 
-            response = f"** AI ANSWER:** {answer_text}"
+        is_safe = bool(validation.get("is_safe", True))
+        risk_level = validation.get("risk_level", "unknown")
+        action = behavioral.get("action", "ALLOW")
 
-            sources_count = len(result.get("sources", []))
-            response_time = time.time() - start_time
+        if (not is_safe) or action in ["RATE_LIMIT", "BLOCK"]:
+            block_text = f"🚫 **Security Alert:** This query was blocked. Risk level: **{risk_level}**."
 
-            query_data = {
-                    "query": query,
-                    "response": response,
-                    "jurisdiction":  jur,
-                    "analysis_type": prompt_type_key,
-                    "response_time": response_time,
-                    "sources_count": sources_count
-                }
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": block_text,
+                "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "N/A"}
+            })
 
-            db_manager.save_query(query_data)
-            st.session_state.last_response = query_data
+            db_manager.save_query({
+                "query": user_input,
+                "response": block_text,
+                "jurisdiction": "All",
+                "analysis_type": "Security Block",
+                "response_time": 0.0,
+                "sources_count": 0
+            })
 
-   
-# CENTER COLUMN - Response
-with col_center:
-    st.markdown('<h2>📋 Response</h2>', unsafe_allow_html=True)
-    
-    if st.session_state.last_response:
-        st.info(f"**Query:** {st.session_state.last_response['query']}")
-        
-        # Show if blocked
-        if "BLOCKED" in st.session_state.last_response.get('response', ''):
-            st.error(f"🚫 **Status:** {st.session_state.last_response['response']}")
-        else:
-            st.markdown(st.session_state.last_response['response'])
-            
-            col_meta1, col_meta2, col_meta3 = st.columns(3)
-            with col_meta1:
-                st.success(f"⏱️ {st.session_state.last_response['response_time']:.2f}s")
-            with col_meta2:
-                st.info(f"📚 {st.session_state.last_response['sources_count']} sources")
-            with col_meta3:
-                st.info(f"📍 {st.session_state.last_response['jurisdiction']}")
+            st.session_state.processing = False
+            st.rerun()
+
+    # Prompt-type detection
+    q_lower = user_input.lower()
+    if "compare" in q_lower or "difference" in q_lower:
+        prompt_type_key = "comparative"
+    elif "i was" in q_lower or "scenario" in q_lower:
+        prompt_type_key = "scenario"
     else:
-        st.markdown(f"""
-        <div style="text-align: center; padding: 3rem; color: #6b7280;">
-            <h2 style="font-size: 3rem;">🚦</h2>
-            <h3>Ready to Answer</h3>
-            <p>{"🛡️ Security Active" if SECURITY_ENABLED else "⚠️ Running without security"}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        prompt_type_key = "general"
 
-# Footer (same as yours)
+    # Run workflow
+    start_time = time.time()
+    result = workflow.query(user_input, prompt_type_key)
+    response_time = time.time() - start_time
+
+    jur = result.get("detected_jurisdiction", "All")
+    if isinstance(jur, list):
+        jur = ", ".join(jur)
+
+    answer_text = sanitize_text((result.get("answer") or "").strip())
+    sources_count = len(result.get("sources", []) or [])
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer_text,
+        "metadata": {
+            "sources_count": sources_count,
+            "response_time": response_time,
+            "jurisdiction": jur
+        }
+    })
+
+    db_manager.save_query({
+        "query": user_input,
+        "response": answer_text,
+        "jurisdiction": jur,
+        "analysis_type": prompt_type_key,
+        "response_time": response_time,
+        "sources_count": sources_count
+    })
+
+    st.session_state.processing = False
+    st.rerun()
+
+# -------------------- FOOTER --------------------
 st.markdown("---")
-st.markdown('<center><small>🚗 DriveSmart AI © 2025 | Northeastern University</small></center>', unsafe_allow_html=True)
+st.markdown("""
+<center>
+    <p style="color: rgba(255, 255, 255, 0.5); font-size: 1.15rem;">
+        🚗 DriveSmart AI © 2025 | Powered by LangChain, ChromaDB & OpenAI<br/>
+        Northeastern University - INFO 7375
+    </p>
+</center>
+""", unsafe_allow_html=True)

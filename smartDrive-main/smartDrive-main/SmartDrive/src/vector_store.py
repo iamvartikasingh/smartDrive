@@ -79,7 +79,7 @@ def extract_jurisdictions(text: str) -> List[str]:
 
     return out
 # Load from src/.env file
-env_path = Path(__file__).parent.parent/'src'/'.env'
+env_path = Path(__file__).parent.parent / ".env"
 print(env_path)
 if env_path.exists():
     load_dotenv(env_path,override=True)
@@ -267,11 +267,11 @@ Answer:"""
     
     "scenario": PromptTemplate(
         input_variables=["context", "scenario"],
-        template="""You are a certified traffic law instructor.
+       template="""You are a certified traffic law instructor.
 
 Use ONLY the context.
 
-Answer the question in ONE short sentence.
+Answer the scenario in ONE short sentence.
 Do not include numbering, labels, headings, or extra explanation.
 If the answer is not in the context, reply exactly:
 Not found in database.
@@ -279,19 +279,22 @@ Not found in database.
 Context:
 {context}
 
-Question:
-{question}
+Scenario:
+{scenario}
 
 Answer:"""
+
     ),
-    "comparative": PromptTemplate(
-        input_variables=["context", "question"],
-         template="""You are a certified traffic law instructor.
+  
+"comparative": PromptTemplate(
+    input_variables=["context", "question"],
+    template="""You are a certified traffic law instructor.
 
 Use ONLY the context.
 
-Answer the question in ONE short sentence.
-Do not include numbering, labels, headings, or extra explanation.
+Answer in 2 short sentences:
+- sentence 1: Massachusetts rule/penalty
+- sentence 2: California rule/penalty
 If the answer is not in the context, reply exactly:
 Not found in database.
 
@@ -302,6 +305,7 @@ Question:
 {question}
 
 Answer:"""
+
     )
         }
     
@@ -352,41 +356,44 @@ Answer:"""
         )
 
         return chain
-    def query(self, question: str, prompt_type: str = 'general'):
+    def query(self, question: str, prompt_type: str = "general"):
         states = extract_jurisdictions(question)
 
-        # Pull more docs first, then filter in Python (most reliable)
-        base_retriever = self.vectorstore.as_retriever(search_kwargs={"k": 8})
-
-        # Filter retrieved docs by mentioned states
         if states:
-            retriever = base_retriever | RunnableLambda(
-               lambda docs: [
-                    d for d in docs
-                    if (d.metadata.get("jurisdiction") or "").strip() in states
-                ]
-            )
+            docs = []
+            for st in states:
+                r = self.vectorstore.as_retriever(
+                    search_kwargs={"k": 4, "filter": {"jurisdiction": st}}
+                )
+                docs.extend(r.invoke(question))
+            # de-dupe by id if needed
+            seen = set()
+            filtered = []
+            for d in docs:
+                _id = d.metadata.get("id")
+                if _id and _id in seen:
+                    continue
+                seen.add(_id)
+                filtered.append(d)
+            retriever = RunnableLambda(lambda _: filtered)
         else:
-            retriever = base_retriever
+            retriever = self.vectorstore.as_retriever(search_kwargs={"k": 8})
 
         chain = self.create_chain(prompt_type, retriever=retriever)
         result = chain.invoke(question)
-        raw = result["answer"].strip()
-        # Take first non-empty line
-        first_line = next((l.strip() for l in raw.splitlines() if l.strip()), "")
 
-# Remove common leading labels/numbering
-        first_line = re.sub(r"^\s*\d+[\.\)]\s*", "", first_line)  # "1. "
+        raw = result["answer"].strip()
+        first_line = next((l.strip() for l in raw.splitlines() if l.strip()), "")
+        first_line = re.sub(r"^\s*\d+[\.\)]\s*", "", first_line)
         first_line = re.sub(r"^\s*direct answer\s*:\s*", "", first_line, flags=re.I)
 
-        answer = first_line.strip() if first_line else "Not found in database"
+        answer = first_line if first_line else "Not found in database"
 
         return {
-          "answer": answer,
-          "sources": result["sources"],
-          "detected_jurisdiction": ", ".join(states) if states else "Unspecified"
-}
- 
+            "answer": answer,
+            "sources": result.get("sources", []),
+            "detected_jurisdiction": ", ".join(states) if states else "Unspecified"
+        }
 
 # ============================================================================
 # MAIN EXECUTION

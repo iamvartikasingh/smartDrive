@@ -3,82 +3,57 @@
       "id": "CA001",
       "jurisdiction": "California",
       "category": "Speed Limits",
-      "violation": "Unsafe speed for conditions",
+      "violation": "Unsafe speed for conditions (Basic Speed Law)",
       "law_text": "No person shall drive a vehicle upon a highway at a speed greater than is reasonable or prudent having due regard for weather, visibility, traffic, and surface conditions.",
       "statute": "California Vehicle Code § 22350",
-      "penalty": "$238+ fine, 1-2 points depending on speed",
-      "severity": "high",
-      "preventive_tip": "Adjust speed for weather, traffic, and road conditions.",
-      "keywords": ["speeding", "basic speed law", "highway", "weather"],
-  
+      "penalty": "$238+ fine, 1 point",
+      "severity": "medium",
+      "preventive_tip": "Even if the limit is 65, slow down if it's raining or foggy.",
+      "keywords": ["speeding", "basic speed law", "weather"],
       "topic": "speeding",
       "subtopic": "basic_speed_law",
-      "scenario_key": "speeding_basic_speed_law",
-      "rule_summary": "Drivers must travel at a reasonable and prudent speed based on real-time conditions such as weather, visibility, traffic, and road surface.",
-      "thresholds": [
-        {
-          "type": "conditions_based_standard",
-          "value": "reasonable and prudent",
-          "unit": "standard"
-        }
-      ],
-      "penalty_structure": {
-        "fine_min_usd": 238,
-        "fine_note": "May increase based on circumstances and local assessments",
-        "points_range": [1, 2]
-      },
+      "scenario_key": "speeding_basic_ca",
+      "rule_summary": "Speed must be reasonable for current conditions, regardless of posted limit.",
+      "thresholds": [{ "type": "condition_dependent", "value": "reasonable", "unit": "standard" }],
+      "penalty_structure": { "fine_min_usd": 238, "points_fixed": 1 },
       "confidence": "high"
     },
     {
       "id": "CA002",
       "jurisdiction": "California",
-      "category": "Seat Belts",
-      "violation": "Failure to wear seat belt",
-      "law_text": "A person shall not operate a motor vehicle on a highway unless that person and all passengers 16 years of age or over are properly restrained by a safety belt.",
-      "statute": "California Vehicle Code § 27315",
-      "penalty": "$162 fine (first offense)",
-      "severity": "low",
-      "preventive_tip": "Buckle up before you start driving.",
-      "keywords": ["seat belt", "restraint", "passenger safety"],
-  
-      "topic": "occupant_safety",
-      "subtopic": "seat_belt_requirement",
-      "scenario_key": "seatbelt_driver_passengers_16plus",
-      "rule_summary": "Drivers must ensure they and passengers aged 16+ are properly restrained by a safety belt while operating a vehicle on a highway.",
-      "thresholds": [
-        {
-          "type": "age_applies_from",
-          "value": 16,
-          "unit": "years"
-        }
-      ],
-      "penalty_structure": {
-        "fine_usd": 162,
-        "offense_level": "first"
-      },
+      "category": "Lanes",
+      "violation": "HOV Lane Violation",
+      "law_text": "No person shall drive a vehicle on strictly preferential use lanes (carpool) unless that vehicle carries the requisite number of occupants.",
+      "statute": "California Vehicle Code § 21655.5",
+      "penalty": "$490 minimum fine",
+      "severity": "medium",
+      "preventive_tip": "Check the diamond lane signs; hours and occupancy rules vary.",
+      "keywords": ["carpool", "HOV", "diamond lane"],
+      "topic": "lane_usage",
+      "subtopic": "hov_violation",
+      "scenario_key": "hov_lane_violation_ca",
+      "rule_summary": "Solo drivers cannot use HOV lanes during active hours.",
+      "thresholds": [{ "type": "occupancy_min", "value": 2, "unit": "persons" }],
+      "penalty_structure": { "fine_min_usd": 490 },
       "confidence": "high"
     },
     {
       "id": "CA003",
       "jurisdiction": "California",
       "category": "Phone Use",
-      "violation": "Handheld phone use while driving",
-      "law_text": "Drivers may not hold and operate a handheld wireless telephone or electronic communications device while driving.",
+      "violation": "Handheld Device Use",
+      "law_text": "A person shall not drive a motor vehicle while holding and operating a handheld wireless telephone or an electronic wireless communications device.",
       "statute": "California Vehicle Code § 23123.5",
-      "penalty": "Base fine varies; increased penalties for repeat offenses",
+      "penalty": "$20 base fine (1st offense), but fees make it ~$160+",
       "severity": "high",
-      "preventive_tip": "Use hands-free and set navigation before moving.",
-      "keywords": ["phone", "handheld", "distracted driving"],
-  
+      "preventive_tip": "Mount your phone on the dash; holding it is illegal even at stoplights.",
+      "keywords": ["cell phone", "handheld", "distracted"],
       "topic": "distracted_driving",
-      "subtopic": "handheld_phone_ban",
-      "scenario_key": "phone_handheld_ban_general",
-      "rule_summary": "Drivers are prohibited from holding and operating handheld phones or electronic communication devices while driving.",
+      "subtopic": "handheld_ban",
+      "scenario_key": "phone_handheld_ca",
+      "rule_summary": "Holding a phone while driving is prohibited.",
       "thresholds": [],
-      "penalty_structure": {
-        "fine_note": "Base fine varies; higher penalties for repeat offenses",
-        "repeat_offense": true
-      },
-      "confidence": "medium"
+      "penalty_structure": { "fine_est_total_usd": 162, "points_range": [0, 1] },
+      "confidence": "high"
     }
   ]
