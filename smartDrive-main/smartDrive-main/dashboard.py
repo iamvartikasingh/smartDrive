@@ -146,7 +146,7 @@ if "messages" not in st.session_state:
         {
             "role": "assistant",
             "content": "Hi! I’m DriveSmart AI. Ask me anything about traffic laws. I’ll respond with clear guidance based on the indexed jurisdictions.",
-            "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "All"}
+            "metadata": {"sources_count": 3, "response_time": 0.0, "jurisdiction": "All"}
         }
     ]
 if "pending_query" not in st.session_state:
