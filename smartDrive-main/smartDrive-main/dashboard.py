@@ -76,6 +76,22 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# Inject Material Icons / Material Symbols so ligature text like
+# "keyboard_double_arrow_right" renders as an icon instead of raw text.
+try:
+    st.markdown(
+        """
+        <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400,0,0" rel="stylesheet" />
+        <style>
+        .material-icons, .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 48; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+except Exception:
+    # If injection fails, we still want the app to continue
+    pass
 # -------------------- SCOPE GUARD --------------------
 TRAFFIC_KEYWORDS = {
     "traffic", "drive", "driving", "driver", "license", "licence",
