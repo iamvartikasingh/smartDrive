@@ -1021,7 +1021,16 @@ render_chat(st.session_state.messages)
 has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
 
 if not has_user_message:
-    st.image("intro.png", width=500)
+    try:
+        from pathlib import Path
+        if Path("intro.png").exists():
+            st.image("intro.png", width=500)
+        else:
+            # No intro image available in deployment; skip gracefully
+            pass
+    except Exception:
+        # If anything goes wrong showing the image, continue without crashing
+        pass
 if st.session_state.get("clear_user_input"):
         st.session_state["user_input"] = ""
         st.session_state.clear_user_input = False
