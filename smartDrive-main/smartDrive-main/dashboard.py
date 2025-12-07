@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 # Inject Material Icons / Material Symbols so ligature text like
-# "keyboard_double_arrow_right" renders as an icon instead of raw text.
+# "<" renders as an icon instead of raw text.
 try:
     st.markdown(
         """
@@ -665,7 +665,7 @@ section[data-testid="stSidebar"]{
 
     .chat-subtitle {
         color: var(--text-mid);
-        font-size: 1.2rem;
+        font-size: 1rem;
     }
 
     .supported-strip {
@@ -775,7 +775,7 @@ section[data-testid="stSidebar"]{
 
     .user-message,
     .ai-message {
-        font-size: 1.2rem;
+        font-size: 1rem;
         line-height: 1.6;
     }
 
@@ -825,9 +825,9 @@ section[data-testid="stSidebar"]{
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 50px !important;
+        border-radius: 10px !important;
         color: black !important;
-        font-size: 1.2rem !important;
+        font-size: 1rem !important;
         padding: 0.95rem !important;
         caret-color: var(--teal) !important;
     }
@@ -1118,8 +1118,27 @@ def render_chat(messages):
                 """,
                 unsafe_allow_html=True
             )
+render_chat(st.session_state.messages)
 
 # ✅ Intro image only until the first user question
+has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
+
+if not has_user_message:
+    try:
+        # Use absolute path from the module root so Streamlit Cloud finds the file
+        img_path = ROOT / "intro.png"
+        if img_path.exists():
+            try:
+                st.image(str(img_path), width=500)
+            except Exception:
+                # If Streamlit fails to render the image for any reason, continue
+                pass
+        else:
+            # Intro image missing in deployment — skip gracefully
+            pass
+    except Exception:
+        # Defensive: do not allow any image-handling error to crash the app
+        pass
 
 # -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
 # This ensures the textarea shows the selected prompt on rerun
@@ -1299,8 +1318,6 @@ if st.session_state.processing and st.session_state.pending_query:
         st.session_state.thinking_rendered = False
         st.rerun()
 
-   
-
     # ---------------- PROMPT TYPE DETECTION ----------------
     q_lower = pending.lower()
     if "compare" in q_lower or "difference" in q_lower:
@@ -1374,24 +1391,3 @@ if st.session_state.processing and st.session_state.pending_query:
     st.session_state.pending_query = None
     st.session_state.thinking_rendered = False
     st.rerun()
-
-render_chat(st.session_state.messages)
-
-has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
-
-if not has_user_message:
-    try:
-        # Use absolute path from the module root so Streamlit Cloud finds the file
-        img_path = ROOT / "intro.png"
-        if img_path.exists():
-            try:
-                st.image(str(img_path), width=500)
-            except Exception:
-                # If Streamlit fails to render the image for any reason, continue
-                pass
-        else:
-            # Intro image missing in deployment — skip gracefully
-            pass
-    except Exception:
-        # Defensive: do not allow any image-handling error to crash the app
-        pass
