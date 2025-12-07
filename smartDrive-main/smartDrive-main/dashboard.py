@@ -1031,14 +1031,19 @@ has_user_message = any(m.get("role") == "user" for m in st.session_state.message
 
 if not has_user_message:
     try:
-        from pathlib import Path
-        if Path("intro.png").exists():
-            st.image("intro.png", width=500)
+        # Use absolute path from the module root so Streamlit Cloud finds the file
+        img_path = ROOT / "intro.png"
+        if img_path.exists():
+            try:
+                st.image(str(img_path), width=500)
+            except Exception:
+                # If Streamlit fails to render the image for any reason, continue
+                pass
         else:
-            # No intro image available in deployment; skip gracefully
+            # Intro image missing in deployment — skip gracefully
             pass
     except Exception:
-        # If anything goes wrong showing the image, continue without crashing
+        # Defensive: do not allow any image-handling error to crash the app
         pass
 if st.session_state.get("clear_user_input"):
         st.session_state["user_input"] = ""
