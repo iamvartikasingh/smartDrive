@@ -1118,9 +1118,10 @@ def render_chat(messages):
                 """,
                 unsafe_allow_html=True
             )
-render_chat(st.session_state.messages)
 
 # ✅ Intro image only until the first user question
+render_chat(st.session_state.messages)
+
 has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
 
 if not has_user_message:
