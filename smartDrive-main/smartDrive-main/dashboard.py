@@ -277,7 +277,16 @@ class DatabaseManager:
             self.db_connected = False
 
         # ---- SQLite for analytics ----
-        self.sqlite_conn = sqlite3.connect('drivesmart_analytics.db', check_same_thread=False)
+        # Use a writable location for the SQLite file (Streamlit Cloud's repo mount can be read-only).
+        import tempfile
+        db_dir = os.getenv('DRIVESMART_DB_PATH') or tempfile.gettempdir()
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+        except Exception:
+            # If path is a file path or cannot be created, fall back to tempfile.gettempdir()
+            db_dir = tempfile.gettempdir()
+        self.sqlite_path = str(Path(db_dir) / 'drivesmart_analytics.db')
+        self.sqlite_conn = sqlite3.connect(self.sqlite_path, check_same_thread=False)
         self._init_sqlite_tables()
 
     def _init_sqlite_tables(self):
@@ -298,20 +307,36 @@ class DatabaseManager:
 
     def save_query(self, query_data):
         cursor = self.sqlite_conn.cursor()
-        cursor.execute('''
-            INSERT INTO query_history 
-            (query, response, jurisdiction, analysis_type, response_time, sources_count)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            query_data.get('query', ''),
-            (query_data.get('response', '') or '')[:1000],
-            query_data.get('jurisdiction', 'All'),
-            query_data.get('analysis_type', 'general'),
-            float(query_data.get('response_time', 0.0)),
-            int(query_data.get('sources_count', 0))
-        ))
-        self.sqlite_conn.commit()
-        return cursor.lastrowid
+        try:
+            cursor.execute('''
+                INSERT INTO query_history 
+                (query, response, jurisdiction, analysis_type, response_time, sources_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                query_data.get('query', ''),
+                (query_data.get('response', '') or '')[:1000],
+                query_data.get('jurisdiction', 'All'),
+                query_data.get('analysis_type', 'general'),
+                float(query_data.get('response_time', 0.0)),
+                int(query_data.get('sources_count', 0))
+            ))
+            self.sqlite_conn.commit()
+            return cursor.lastrowid
+        except sqlite3.OperationalError as e:
+            # Log and surface a concise message without exposing sensitive details in the UI.
+            try:
+                # Best-effort logging for Cloud logs
+                print(f"[DatabaseManager] OperationalError saving query to {getattr(self, 'sqlite_path', 'drivesmart_analytics.db')}: {e}")
+            except Exception:
+                pass
+            return None
+        except Exception as e:
+            # Generic catch-all to avoid crashing the app from analytics failures
+            try:
+                print(f"[DatabaseManager] Error saving query: {e}")
+            except Exception:
+                pass
+            return None
 
     def get_stats(self):
         cursor = self.sqlite_conn.cursor()
