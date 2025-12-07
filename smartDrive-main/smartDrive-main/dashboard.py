@@ -15,7 +15,13 @@ import uuid
 import inspect
 import re
 import html
+import json
+import base64
 
+def img_to_base64(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+BG_B64 = img_to_base64("bg.png")
 # -------------------- ENV LOADER --------------------
 def load_env():
     candidates = [
@@ -61,7 +67,48 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# -------------------- SCOPE GUARD --------------------
+TRAFFIC_KEYWORDS = {
+    "traffic", "drive", "driving", "driver", "license", "licence",
+    "road", "highway", "street", "intersection", "signal", "stop sign",
+    "red light", "green light", "yellow light",
+    "speed", "speeding", "limit", "school zone",
+    "dui", "dwi", "alcohol", "impaired",
+    "seat belt", "seatbelt", "phone", "texting", "handsfree",
+    "parking", "registration", "insurance",
+    "vehicle", "car", "motorcycle", "truck",
+    "ticket", "fine", "points", "suspension", "reckless"
+}
 
+OUT_OF_SCOPE_MESSAGE = (
+    "I’m DriveSmart AI — a traffic-law assistant. "
+    "I provide guidance on traffic rules, penalties, and safe driving across supported states. "
+    "Your question looks outside my scope. "
+    "Please ask me something related to traffic laws or safe driving in a supported state."
+)
+
+def is_traffic_related(query: str) -> bool:
+    if not query:
+        return False
+    q = query.lower().strip()
+
+    # quick early allow for common traffic intents
+    if any(x in q for x in ["speed limit", "turn right", "license", "dui", "parking", "red light"]):
+        return True
+
+    return any(k in q for k in TRAFFIC_KEYWORDS)
+
+def build_out_of_scope_answer(supported_states):
+    # optional: include a small states hint without making this long
+    preview = ", ".join((supported_states or [])[:5])
+    if preview:
+        return (
+            "I’m DriveSmart AI — a traffic-law assistant. "
+            f"I provide guidance on traffic rules, penalties, and safe driving across {preview} and other supported states. "
+            "Your question looks outside my scope. "
+            "Please ask me something related to traffic laws or safe driving in a supported state."
+        )
+    return OUT_OF_SCOPE_MESSAGE
 # -------------------- SESSION STATE (ONLY ONCE) --------------------
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -77,7 +124,13 @@ if "messages" not in st.session_state:
             "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "All"}
         }
     ]
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = None
 
+if "thinking_rendered" not in st.session_state:
+    st.session_state.thinking_rendered = False
+if "clear_user_input" not in st.session_state:
+    st.session_state.clear_user_input = False
 # -------------------- LEGACY HTML CLEANUP --------------------
 TAG_RE = re.compile(r"<[^>]+>")
 
@@ -100,7 +153,71 @@ def sanitize_text(text: str) -> str:
 
     return text.strip()
 
+# -------------------- TABLE JSON EXTRACTOR --------------------
+TABLE_BLOCK_RE = re.compile(
+    r"(?:TABLE__JSON|TABLE_JSON)\s*:\s*([\s\S]*?)(?=\n\s*\n|KEY TAKEAWAYS:|🔑|$)",
+    re.IGNORECASE
+)
 
+def extract_table_obj_and_clean_text(raw: str):
+    """
+    Returns (table_obj_or_None, cleaned_display_text)
+    Finds TABLE_JSON: { ... } block and removes it from text.
+    """
+    if not raw:
+        return None, raw
+
+    m = TABLE_BLOCK_RE.search(raw)
+    if not m:
+        return None, raw
+
+    block = (m.group(1) or "").strip()
+
+    # Try to locate JSON object boundaries safely
+    start = block.find("{")
+    end = block.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        display_text = TABLE_BLOCK_RE.sub("", raw).strip()
+        return None, display_text
+
+    json_str = block[start:end + 1]
+
+    try:
+        table_obj = json.loads(json_str)
+    except Exception:
+        display_text = TABLE_BLOCK_RE.sub("", raw).strip()
+        return None, display_text
+
+    # Remove the entire TABLE_JSON block from visible text
+    display_text = TABLE_BLOCK_RE.sub("", raw).strip()
+
+    return table_obj, display_text
+
+
+def build_comparison_text(table_obj: dict) -> str:
+    j1 = str(table_obj.get("jurisdiction_1", "Jurisdiction 1")).strip()
+    j2 = str(table_obj.get("jurisdiction_2", "Jurisdiction 2")).strip()
+    rows = table_obj.get("rows", []) or []
+
+    lines = []
+    lines.append(f"Comparison: {j1} vs {j2}")
+
+    for r in rows:
+        aspect = str(r.get("aspect", "")).strip()
+        v1 = str(r.get("j1", "")).strip()
+        v2 = str(r.get("j2", "")).strip()
+
+        if not aspect:
+            continue
+
+        lines.append("")
+        lines.append(f"{aspect}")
+        if v1:
+            lines.append(f"- {j1}: {v1}")
+        if v2:
+            lines.append(f"- {j2}: {v2}")
+
+    return "\n".join(lines).strip()
 def normalize_messages_once():
     cleaned = []
     for m in st.session_state.messages:
@@ -273,10 +390,33 @@ def get_workflow():
 db_manager, input_validator, output_validator, behavioral_monitor = get_managers()
 workflow = get_workflow()
 supported_states = db_manager.get_supported_jurisdictions()
-
+st.markdown(f"""
+<style>
+.stApp {{
+    background:
+        /* SUPER DARK overlay */
+        linear-gradient(
+            180deg,
+            rgba(0,0,0,0.88),
+            rgba(0,0,0,0.92)
+        ),
+        /* subtle tech tint */
+        radial-gradient(circle at 12% 12%, rgba(59,151,151,0.10), transparent 38%),
+        radial-gradient(circle at 88% 20%, rgba(22,71,106,0.10), transparent 42%),
+        radial-gradient(circle at 40% 90%, rgba(191,9,47,0.06), transparent 45%),
+        /* your bg image */
+        url('data:image/png;base64,{BG_B64}');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}}
+</style>
+""", unsafe_allow_html=True)
 # -------------------- MODERN CSS --------------------
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display: none;}
@@ -302,7 +442,39 @@ st.markdown("""
         --shadow-soft: 0 8px 28px rgba(0,0,0,0.35);
         --shadow-pop: 0 10px 30px rgba(0,0,0,0.45);
     }
+/* Import Poppins */
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(button):has(span:contains("Clear Chat History")) button{
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid rgba(0,0,0,0.15) !important;
+    box-shadow: none !important;
+}
+/* Sidebar - make ONLY "Clear Chat History" white with black text */
+section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"],
+section[data-testid="stSidebar"] button:has(span:contains("Clear Chat History")) {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid rgba(0,0,0,0.15) !important;
+    box-shadow: none !important;
+}
 
+/* Hover */
+section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"]:hover {
+    background: #f5f5f5 !important;
+    color: #000000 !important;
+    transform: none !important;
+    filter: none !important;
+}
+/* Apply globally */
+html, body, [class*="st-"], .stApp, .stMarkdown, .stTextArea, .stButton, input, textarea, button {
+    font-family: "Poppins", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+/* Ensure your custom header text also uses Poppins */
+header[data-testid="stHeader"]::after,
+div[data-testid="stToolbar"]::before{
+    font-family: "Poppins", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
     .stApp {
         background:
             radial-gradient(circle at 12% 12%, rgba(59,151,151,0.16), transparent 38%),
@@ -311,12 +483,58 @@ st.markdown("""
             linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%) !important;
         color: var(--text-strong);
     }
+/* --- Top Streamlit header bar --- */
+header[data-testid="stHeader"]{
+    background: #000000 !important;
+    border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+    box-shadow: none !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 9999 !important;
+}
 
+/* The tiny top accent/decoration strip */
+div[data-testid="stDecoration"]{
+    background: #000000 !important;
+    height: 0px !important;  /* remove the colored line */
+}
+
+/* Optional: make toolbar area also black */
+div[data-testid="stToolbar"]{
+    background: #000000 !important;
+}
+
+/* Hide default Streamlit header actions if they still appear */
+.stDeployButton { display: none !important; }
+#MainMenu { visibility: hidden !important; }
+.st-emotion-cache-ausnhs{
+            
+            
+            }
+/* Add custom header text */
+header[data-testid="stHeader"]::after{
+    content: "Ask DriveSmartAi";
+    color: #FFFFFF;
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: 0.3px;
+
+    position: absolute;
+                left: 50%;
+
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
     section[data-testid="stSidebar"]{
         background:
             linear-gradient(180deg, rgba(19,36,64,0.35), rgba(5,6,7,0.9)) !important;
         border-right: 1px solid var(--border-1);
     }
+section[data-testid="stSidebar"]{
+    background: #050607 !important; /* same as --bg-0 */
+    border-right: 1px solid var(--border-1);
+}
 
     .chat-header {
         background: linear-gradient(
@@ -344,7 +562,7 @@ st.markdown("""
 
     .chat-subtitle {
         color: var(--text-mid);
-        font-size: 1.5rem;
+        font-size: 1.2rem;
     }
 
     .supported-strip {
@@ -402,7 +620,7 @@ st.markdown("""
 /* ------------------ USER BUBBLE ------------------ */
 .user-message{
     background: linear-gradient(135deg, var(--teal), var(--blue-steel)) !important;
-    color: white;
+    color: black;
     padding: 1rem 1.2rem;
     border-radius: 16px 16px 4px 16px;
     max-width: 70%;
@@ -454,7 +672,7 @@ st.markdown("""
 
     .user-message,
     .ai-message {
-        font-size: 1.5rem;
+        font-size: 1.2rem;
         line-height: 1.6;
     }
 
@@ -504,15 +722,15 @@ st.markdown("""
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 12px !important;
-        color: var(--text-strong) !important;
-        font-size: 1.3rem !important;
+        border-radius: 50px !important;
+        color: black !important;
+        font-size: 1.2rem !important;
         padding: 0.95rem !important;
         caret-color: var(--teal) !important;
     }
 
     .stTextArea textarea::placeholder{
-        color: rgba(248,250,252,0.45) !important;
+        color: #6B7280 !important;
     }
 
     .stTextArea textarea:focus {
@@ -541,7 +759,7 @@ st.markdown("""
     .stat-card {
         background: var(--glass-1);
         border-radius: 14px;
-        padding: 1.1rem;
+        padding: 1.2rem;
         margin-bottom: 0.8rem;
         border: 1px solid var(--border-1);
         text-align: center;
@@ -577,6 +795,68 @@ st.markdown("""
         color: #ffb3c2;
         border-color: rgba(191,9,47,0.35);
     }
+/* -------- Sticky Bottom Composer -------- */
+
+/* Give page extra room so content doesn't hide behind fixed composer */
+/* -------- Sticky Bottom Composer (robust) -------- */
+
+/* Give extra room so content doesn't hide behind fixed composer */
+/* -------- Sticky Bottom Composer (single source of truth) -------- */
+
+/* Give extra room so content doesn't hide behind fixed composer */
+div[data-testid="stAppViewContainer"] .main .block-container{
+    padding-bottom: 10px !important;
+}
+/* Space so content doesn't hide behind fixed composer */
+div[data-testid="stAppViewContainer"] .main .block-container{
+    padding-bottom: 10px !important;
+}
+
+/* Make ONLY the immediate block after the anchor fixed */
+#composer-anchor + div{
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+
+    background: linear-gradient(
+        180deg,
+        rgba(5,6,7,0.0),
+        rgba(5,6,7,0.88),
+        #050607
+    ) !important;
+
+    backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(255,255,255,0.08) !important;
+
+    padding: 0.9rem 1.2rem 0.7rem 1.2rem !important;
+    z-index: 9999 !important;
+}
+
+.composer-footer{
+    text-align: center;
+    color: rgba(255,255,255,0.5);
+    font-size: 0.95rem;
+    margin-top: 0.5rem;
+    line-height: 1.3;
+}
+/* Fix ONLY the block that contains our marker */
+
+section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"] {
+    background: #fff !important;
+    color: #000 !important;
+    border: 1px solid rgba(0,0,0,0.15) !important;
+}
+
+/* Target by key hint (Streamlit often includes key in attributes/classes) */
+
+/* Footer style inside composer */
+
+
+/* The block right after this anchor becomes the fixed bottom bar */
+
+
+/* Make sure textarea + button don't stretch weirdly inside fixed container */
 
     hr {
         border: none !important;
@@ -592,10 +872,29 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # -------------------- SIDEBAR --------------------
 with st.sidebar:
-    st.markdown('<div class="chat-header">', unsafe_allow_html=True)
-    st.markdown('<h2 style="color: white; margin: 0;">Dashboard</h2>', unsafe_allow_html=True)
+ 
+    st.markdown("""
+    <style>
+    section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"]{
+        background: #ffffff !important;
+        color: #000000 !important;
+        border: 1px solid rgba(0,0,0,0.15) !important;
+        box-shadow: none !important;
+        font-weight: 600 !important;
+    }
+    section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"]:hover{
+        background: #f5f5f5 !important;
+        color: #000000 !important;
+        transform: none !important;
+        filter: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="chat-header">DASHBOARD', unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
     stats = db_manager.get_stats()
@@ -628,7 +927,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown('<h3 style="color: white;">💡 Quick Prompts</h3>', unsafe_allow_html=True)
-
+    # -------------------- CLEAR INPUT (MUST RUN BEFORE text_area) --------------------
+    
     quick_prompts = [
         "What is the basic speed law in California?",
         "Can I turn right on red in New York?",
@@ -643,7 +943,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
+    if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
         st.session_state.messages = st.session_state.messages[:1]
         st.session_state.messages_migrated_v3 = True  # keep as migrated
         st.rerun()
@@ -655,7 +955,6 @@ st.markdown("""
     <div class="chat-subtitle">Your AI-Powered Traffic Law Assistant</div>
 </div>
 """, unsafe_allow_html=True)
-
 # -------------------- SUPPORTED STATES STRIP --------------------
 def render_state_pills(items):
     items = items or []
@@ -718,43 +1017,107 @@ def render_chat(messages):
             )
 render_chat(st.session_state.messages)
 
-# -------------------- INPUT ROW --------------------
-col1, col2 = st.columns([5, 1])
+# ✅ Intro image only until the first user question
+has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
 
-with col1:
-    user_input = st.text_area(
-        "Ask a question",
-        placeholder="Type your traffic law question here...",
-        key="user_input",
-        height=90,
-        label_visibility="collapsed"
-    )
-
-with col2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    send_button = st.button("Ask Now", use_container_width=True, type="primary")
-
-# Quick prompt trigger
+if not has_user_message:
+    st.image("intro.png", width=500)
+if st.session_state.get("clear_user_input"):
+        st.session_state["user_input"] = ""
+        st.session_state.clear_user_input = False
+# -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
+# This ensures the textarea shows the selected prompt on rerun
+# -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
 if "quick_prompt" in st.session_state:
-    user_input = st.session_state.quick_prompt
-    send_button = True
+    st.session_state["user_input"] = st.session_state.quick_prompt
+    st.session_state["auto_send"] = True
     del st.session_state.quick_prompt
 
+
+# -------------------- BOTTOM COMPOSER (INPUT + FOOTER) --------------------
+# ... header + supported strip + render_chat above ...
+
+# Anchor right before composer
+st.markdown('<div id="composer-anchor"></div>', unsafe_allow_html=True)
+
+with st.container():
+    col1, col2 = st.columns([5, 1])
+
+    with col1:
+        user_input = st.text_area(
+            "Ask a question",
+            placeholder="Type your traffic law question here...",
+            key="user_input",
+            height=90,
+            label_visibility="collapsed"
+        )
+
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        send_button = st.button("Ask Now", use_container_width=True, type="primary")
+
+    st.markdown("""
+    <div class="composer-footer">
+        🚗 DriveSmart AI © 2025 | Powered by LangChain, ChromaDB & OpenAI<br/>
+        Northeastern University - INFO 7375
+    </div>
+    """, unsafe_allow_html=True)
+
+# -------------------- AUTO-SEND FOR QUICK PROMPTS --------------------
+if st.session_state.pop("auto_send", False):
+    send_button = True
+
+
 # -------------------- PROCESS MESSAGE --------------------
+# -------------------- PROCESS MESSAGE (PHASE 1: capture + clear) --------------------
 if send_button and user_input and not st.session_state.processing:
-    st.session_state.processing = True
+    clean_user = sanitize_text(user_input)
 
+    # 1) show user message immediately on next rerun
     st.session_state.messages.append({
-     "role": "user",
-     "content": sanitize_text(user_input)
-})
+        "role": "user",
+        "content": clean_user
+    })
 
-    # Security validation
+    # 2) stash pending query for async-like UX
+    st.session_state.pending_query = clean_user
+    st.session_state.processing = True
+    st.session_state.thinking_rendered = False
+
+   
+
+    st.rerun()
+
+
+# -------------------- PROCESS MESSAGE (PHASE 2/3: thinking -> answer) --------------------
+if st.session_state.processing and st.session_state.pending_query:
+    pending = st.session_state.pending_query
+
+    # Phase 2: render a visible thinking bubble
+    if not st.session_state.thinking_rendered:
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": "⏳ Please wait… I’m checking this.",
+            "metadata": {
+                "sources_count": 0,
+                "response_time": 0.0,
+                "jurisdiction": "N/A",
+                "out_of_scope": False,
+                "is_thinking": True
+            }
+        })
+        st.session_state.thinking_rendered = True
+        st.rerun()
+
+    # Phase 3: compute and replace the thinking bubble
+    start_time = time.time()
+
+    # ---------------- SECURITY VALIDATION ----------------
     if SECURITY_ENABLED and input_validator and behavioral_monitor:
-        validation = input_validator.validate_input(user_input)
+        validation = input_validator.validate_input(pending)
         behavioral = behavioral_monitor.analyze_session(
             st.session_state.session_id,
-            user_input,
+            pending,
             validation
         )
 
@@ -765,26 +1128,79 @@ if send_button and user_input and not st.session_state.processing:
         if (not is_safe) or action in ["RATE_LIMIT", "BLOCK"]:
             block_text = f"🚫 **Security Alert:** This query was blocked. Risk level: **{risk_level}**."
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": block_text,
-                "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "N/A"}
-            })
+            # replace last thinking msg
+            if st.session_state.messages and st.session_state.messages[-1].get("metadata", {}).get("is_thinking"):
+                st.session_state.messages[-1] = {
+                    "role": "assistant",
+                    "content": block_text,
+                    "metadata": {
+                        "sources_count": 0,
+                        "response_time": 0.0,
+                        "jurisdiction": "N/A",
+                        "out_of_scope": True,
+                        "is_thinking": False
+                    }
+                }
+            else:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": block_text,
+                    "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "N/A"}
+                })
 
             db_manager.save_query({
-                "query": user_input,
+                "query": pending,
                 "response": block_text,
-                "jurisdiction": "All",
+                "jurisdiction": "N/A",
                 "analysis_type": "Security Block",
                 "response_time": 0.0,
                 "sources_count": 0
             })
 
             st.session_state.processing = False
+            st.session_state.pending_query = None
+            st.session_state.thinking_rendered = False
             st.rerun()
 
-    # Prompt-type detection
-    q_lower = user_input.lower()
+    # ---------------- SCOPE GUARD ----------------
+    if not is_traffic_related(pending):
+        oos_text = build_out_of_scope_answer(supported_states)
+
+        if st.session_state.messages and st.session_state.messages[-1].get("metadata", {}).get("is_thinking"):
+            st.session_state.messages[-1] = {
+                "role": "assistant",
+                "content": oos_text,
+                "metadata": {
+                    "sources_count": 0,
+                    "response_time": 0.0,
+                    "jurisdiction": "N/A",
+                    "out_of_scope": True,
+                    "is_thinking": False
+                }
+            }
+        else:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": oos_text,
+                "metadata": {"sources_count": 0, "response_time": 0.0, "jurisdiction": "N/A"}
+            })
+
+        db_manager.save_query({
+            "query": pending,
+            "response": oos_text,
+            "jurisdiction": "N/A",
+            "analysis_type": "out_of_scope",
+            "response_time": 0.0,
+            "sources_count": 0
+        })
+
+        st.session_state.processing = False
+        st.session_state.pending_query = None
+        st.session_state.thinking_rendered = False
+        st.rerun()
+
+    # ---------------- PROMPT TYPE DETECTION ----------------
+    q_lower = pending.lower()
     if "compare" in q_lower or "difference" in q_lower:
         prompt_type_key = "comparative"
     elif "i was" in q_lower or "scenario" in q_lower:
@@ -792,30 +1208,52 @@ if send_button and user_input and not st.session_state.processing:
     else:
         prompt_type_key = "general"
 
-    # Run workflow
-    start_time = time.time()
-    result = workflow.query(user_input, prompt_type_key)
+    # ---------------- RUN WORKFLOW ----------------
+    result = workflow.query(pending, prompt_type_key)
     response_time = time.time() - start_time
 
     jur = result.get("detected_jurisdiction", "All")
     if isinstance(jur, list):
         jur = ", ".join(jur)
 
-    answer_text = sanitize_text((result.get("answer") or "").strip())
+    raw_answer = (result.get("answer") or "").strip()
+    table_obj, display_text = extract_table_obj_and_clean_text(raw_answer)
+    answer_text = sanitize_text(display_text)
+
+    if table_obj:
+        comparison_text = build_comparison_text(table_obj)
+        answer_text = f"{answer_text}\n\n{comparison_text}".strip()
+
     sources_count = len(result.get("sources", []) or [])
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer_text,
-        "metadata": {
-            "sources_count": sources_count,
-            "response_time": response_time,
-            "jurisdiction": jur
+    # replace last thinking msg with final answer
+    if st.session_state.messages and st.session_state.messages[-1].get("metadata", {}).get("is_thinking"):
+        st.session_state.messages[-1] = {
+            "role": "assistant",
+            "content": answer_text,
+            "metadata": {
+                "sources_count": sources_count,
+                "response_time": response_time,
+                "jurisdiction": jur,
+                "out_of_scope": False,
+                "is_thinking": False
+            }
         }
-    })
+    else:
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer_text,
+            "metadata": {
+                "sources_count": sources_count,
+                "response_time": response_time,
+                "jurisdiction": jur,
+                "out_of_scope": False,
+                "is_thinking": False
+            }
+        })
 
     db_manager.save_query({
-        "query": user_input,
+        "query": pending,
         "response": answer_text,
         "jurisdiction": jur,
         "analysis_type": prompt_type_key,
@@ -824,15 +1262,6 @@ if send_button and user_input and not st.session_state.processing:
     })
 
     st.session_state.processing = False
+    st.session_state.pending_query = None
+    st.session_state.thinking_rendered = False
     st.rerun()
-
-# -------------------- FOOTER --------------------
-st.markdown("---")
-st.markdown("""
-<center>
-    <p style="color: rgba(255, 255, 255, 0.5); font-size: 1.15rem;">
-        🚗 DriveSmart AI © 2025 | Powered by LangChain, ChromaDB & OpenAI<br/>
-        Northeastern University - INFO 7375
-    </p>
-</center>
-""", unsafe_allow_html=True)

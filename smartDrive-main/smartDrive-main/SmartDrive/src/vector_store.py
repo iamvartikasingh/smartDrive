@@ -55,6 +55,7 @@ US_STATES = {
     "ny": "New York",
     "texas": "Texas",
     "tx": "Texas",
+    "fl": "Florida"
 }
 
 def extract_jurisdictions(text: str) -> List[str]:

@@ -184,29 +184,43 @@ def check_behavioral_patterns(state: SecureTrafficQueryState) -> SecureTrafficQu
     
     return state
 
+TRAFFIC_SCOPE_HINTS = [
+    "traffic", "drive", "driving", "license", "speed", "dui", "parking",
+    "red light", "stop sign", "seat belt", "registration", "insurance"
+]
+
 def classify_query_type(state: SecureTrafficQueryState) -> SecureTrafficQueryState:
-    """Classify query for appropriate prompt selection"""
-    
     query_lower = state["query"].lower()
-    
+
+    # ✅ out-of-scope first
+    if not any(k in query_lower for k in TRAFFIC_SCOPE_HINTS):
+        state["query_type"] = "out_of_scope"
+        return state
+
     if any(word in query_lower for word in ['compare', 'vs', 'versus', 'difference']):
-        query_type = "comparative"
+        state["query_type"] = "comparative"
     elif any(word in query_lower for word in ['how to', 'process', 'steps', 'procedure']):
-        query_type = "procedural"
+        state["query_type"] = "procedural"
     elif any(word in query_lower for word in ['if i', 'what happens', 'scenario']):
-        query_type = "scenario_analysis"
+        state["query_type"] = "scenario_analysis"
     else:
-        query_type = "simple_factual"
-    
-    state["query_type"] = query_type
-    print(f"[CLASSIFY] Query type: {query_type}")
-    
+        state["query_type"] = "simple_factual"
+
     return state
 
 # ============================================================================
 # MODIFIED EXISTING NODE FUNCTIONS
 # ============================================================================
-
+def answer_out_of_scope(state: SecureTrafficQueryState) -> SecureTrafficQueryState:
+    state["answer"] = (
+        "I’m DriveSmart AI — a traffic-law assistant. "
+        "I provide guidance on traffic rules, penalties, and safe driving across supported states. "
+        "Your question looks outside my scope. "
+        "Please ask me something related to traffic laws or safe driving in a supported state."
+    )
+    state["final_status"] = "success"
+    state["confidence"] = 1.0
+    return state
 def retrieve_documents(state: SecureTrafficQueryState) -> SecureTrafficQueryState:
     """Node: Retrieve relevant documents (unchanged)"""
     
@@ -383,6 +397,13 @@ def route_after_behavioral_check(state: SecureTrafficQueryState) -> str:
         return "error"
     return "classify"
 
+def route_after_classify(state: SecureTrafficQueryState) -> str:
+    if state.get("query_type") == "out_of_scope":
+        return "out_of_scope"
+    return "retrieve"
+
+
+
 def should_clarify(state: SecureTrafficQueryState) -> str:
     """Decide whether to clarify or generate answer"""
     if state["needs_clarification"] and state.get("iteration_count", 0) == 0:
@@ -415,92 +436,118 @@ def route_after_output_validation(state: SecureTrafficQueryState) -> str:
 # ============================================================================
 # BUILD SECURE LANGGRAPH
 # ============================================================================
-
 def build_secure_traffic_law_graph():
     """Build the secure LangGraph workflow"""
-    
+
     workflow = StateGraph(SecureTrafficQueryState)
-    
-    # Add security nodes
+
+    # =========================
+    # Add nodes
+    # =========================
+
+    # Security nodes
     workflow.add_node("validate_input", validate_input)
     workflow.add_node("behavioral_check", check_behavioral_patterns)
     workflow.add_node("classify", classify_query_type)
     workflow.add_node("format_error", format_error_response)
-    
-    # Add original nodes (modified)
+
+    # ✅ Out-of-scope node
+    workflow.add_node("out_of_scope", answer_out_of_scope)
+
+    # Core RAG nodes
     workflow.add_node("retrieve", retrieve_documents)
     workflow.add_node("analyze", analyze_confidence)
     workflow.add_node("generate", generate_answer_secure)
     workflow.add_node("validate_output", validate_output)
     workflow.add_node("clarify", request_clarification)
     workflow.add_node("refine", refine_query)
-    
-    # Set entry point (security first!)
+
+    # =========================
+    # Entry point
+    # =========================
     workflow.set_entry_point("validate_input")
-    
+
+    # =========================
     # Security flow
+    # =========================
     workflow.add_conditional_edges(
         "validate_input",
         route_after_input_validation,
         {
             "behavioral_check": "behavioral_check",
-            "error": "format_error"
-        }
+            "error": "format_error",
+        },
     )
-    
+
     workflow.add_conditional_edges(
         "behavioral_check",
         route_after_behavioral_check,
         {
             "classify": "classify",
-            "error": "format_error"
-        }
+            "error": "format_error",
+        },
     )
-    
-    # Original flow (after security)
-    workflow.add_edge("classify", "retrieve")
+
+    # =========================
+    # ✅ Scope routing
+    # =========================
+    workflow.add_conditional_edges(
+        "classify",
+        route_after_classify,
+        {
+            "out_of_scope": "out_of_scope",
+            "retrieve": "retrieve",
+        },
+    )
+
+    workflow.add_edge("out_of_scope", END)
+
+    # =========================
+    # Normal RAG flow
+    # =========================
     workflow.add_edge("retrieve", "analyze")
-    
+
     workflow.add_conditional_edges(
         "analyze",
         should_clarify,
         {
             "generate": "generate",
             "clarify": "clarify",
-            "refine": "refine"
-        }
+            "refine": "refine",
+        },
     )
-    
+
     workflow.add_edge("refine", "retrieve")
-    
+
     workflow.add_conditional_edges(
         "generate",
         should_iterate,
         {
             "retrieve": "retrieve",
-            "validate_output": "validate_output"
-        }
+            "validate_output": "validate_output",
+        },
     )
-    
+
     workflow.add_conditional_edges(
         "validate_output",
         route_after_output_validation,
         {
             "generate": "generate",
             "error": "format_error",
-            "end": END
-        }
+            "end": END,
+        },
     )
-    
+
     workflow.add_edge("clarify", END)
     workflow.add_edge("format_error", END)
-    
-    # Compile with checkpointing
+
+    # =========================
+    # Compile
+    # =========================
     memory = MemorySaver()
     app = workflow.compile(checkpointer=memory)
-    
+
     print("✓ Secure LangGraph workflow compiled successfully")
-    
     return app
 
 # ============================================================================

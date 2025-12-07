@@ -14,6 +14,7 @@ STATE_FILES = [
     "california.json",
     "new_york.json",
     "texas.json",
+    "florida.json",
 ]
 
 OUT_JSON = BASE_DIR / "traffic_laws_dataset.json"

@@ -51,7 +51,7 @@ User Question: {question}
 
 RESPONSE FORMAT (Keep under 250 words):
 
-🎯 DIRECT ANSWER:
+
 [One clear sentence answering the question]
 
 ⚖️ LEGAL BASIS:
@@ -109,17 +109,24 @@ Comparison Query: {question}
 COMPARATIVE ANALYSIS:
 
 📋 OVERVIEW:
-[One sentence summary of key difference]
+[One sentence summary of the key difference]
 
-JURISDICTION COMPARISON:
-┌─────────────────┬──────────────┬──────────────┐
-│ Aspect          │ Jurisdiction 1│ Jurisdiction 2│
-├─────────────────┼──────────────┼──────────────┤
-│ Basic Law       │ [Details]    │ [Details]    │
-│ Penalties       │ [Details]    │ [Details]    │
-│ Points          │ [Details]    │ [Details]    │
-│ Special Notes   │ [Details]    │ [Details]    │
-└─────────────────┴──────────────┴──────────────┘
+IMPORTANT OUTPUT RULES:
+1) Use short, crisp phrases.
+2) Do NOT draw ASCII tables.
+3) Always include a structured JSON block exactly in this format.
+
+TABLE_JSON:
+{{ 
+  "jurisdiction_1": "Jurisdiction 1 name",
+  "jurisdiction_2": "Jurisdiction 2 name",
+  "rows": [
+    {{ "aspect": "Basic Law", "j1": "…", "j2": "…" }},
+    {{ "aspect": "Penalties", "j1": "…", "j2": "…" }},
+    {{ "aspect": "Points", "j1": "…", "j2": "…" }},
+    {{ "aspect": "Special Notes", "j1": "…", "j2": "…" }}
+  ]
+}}
 
 🔑 KEY TAKEAWAYS:
 1. [Most important similarity]
@@ -127,9 +134,7 @@ JURISDICTION COMPARISON:
 3. [Practical advice for travelers]
 
 Keep comparison clear and actionable.
-
-Comparison:"""
-
+"""
 # ============================================================================
 # WORKFLOW WITH REFINED PROMPTS
 # ============================================================================
@@ -144,7 +149,7 @@ class RefinedDriveSmartWorkflow:
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found")
         
-        print(f"✓ API Key loaded: {api_key[:20]}...")
+        # print(f"✓ API Key loaded: {api_key[:20]}...")
         
         # Initialize LLM
         self.llm = ChatOpenAI(

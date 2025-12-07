@@ -39,6 +39,8 @@ class TrafficQueryState(TypedDict):
     needs_clarification: bool
     iteration_count: int
 
+    query_type: str
+
 # ============================================================================
 # INITIALIZE COMPONENTS
 # ============================================================================
@@ -83,7 +85,35 @@ def initialize_components():
     print("✓ All components initialized successfully")
     
     return llm, vectorstore
+TRAFFIC_SCOPE_HINTS = [
+    "traffic", "drive", "driving", "road", "highway", "vehicle", "car",
+    "license", "speed", "dui", "parking", "ticket", "fine",
+    "red light", "stop sign", "seat belt", "registration", "insurance"
+]
 
+def classify_query_type(state: TrafficQueryState) -> TrafficQueryState:
+    query_lower = state["query"].lower()
+
+    if not any(k in query_lower for k in TRAFFIC_SCOPE_HINTS):
+        state["query_type"] = "out_of_scope"
+        return state
+
+    # You can keep this simple in Part 2
+    state["query_type"] = "in_scope"
+    return state
+
+
+def answer_out_of_scope(state: TrafficQueryState) -> TrafficQueryState:
+    state["answer"] = (
+        "I’m DriveSmart AI — a traffic-law assistant. "
+        "I provide guidance on traffic rules, penalties, and safe driving across supported states. "
+        "Your question looks outside my scope. "
+        "Please ask me something related to traffic laws or safe driving in a supported state."
+    )
+    # Keep these stable
+    state["confidence"] = 1.0
+    state["needs_clarification"] = False
+    return state
 # ============================================================================
 # LANGGRAPH NODE FUNCTIONS
 # ============================================================================
@@ -223,25 +253,39 @@ def should_iterate(state: TrafficQueryState) -> str:
 # ============================================================================
 
 def build_traffic_law_graph():
-    """Build the LangGraph workflow with feedback loops"""
+    """Build the LangGraph workflow with feedback loops + out-of-scope guard"""
     
-    # Create state graph
     workflow = StateGraph(TrafficQueryState)
     
-    # Add nodes
+    # ✅ new nodes
+    workflow.add_node("classify", classify_query_type)
+    workflow.add_node("out_of_scope", answer_out_of_scope)
+
+    # existing nodes
     workflow.add_node("retrieve", retrieve_documents)
     workflow.add_node("analyze", analyze_confidence)
     workflow.add_node("generate", generate_answer)
     workflow.add_node("clarify", request_clarification)
     workflow.add_node("refine", refine_query)
     
-    # Set entry point
-    workflow.set_entry_point("retrieve")
-    
-    # Add edges
+    # ✅ entry point starts with classify now
+    workflow.set_entry_point("classify")
+
+    # ✅ classify routes to out_of_scope or retrieve
+    workflow.add_conditional_edges(
+        "classify",
+        route_after_classify,
+        {
+            "out_of_scope": "out_of_scope",
+            "retrieve": "retrieve"
+        }
+    )
+
+    workflow.add_edge("out_of_scope", END)
+
+    # normal flow
     workflow.add_edge("retrieve", "analyze")
     
-    # Conditional edge from analyze
     workflow.add_conditional_edges(
         "analyze",
         should_clarify,
@@ -252,10 +296,8 @@ def build_traffic_law_graph():
         }
     )
     
-    # Feedback loop: refine -> retrieve
     workflow.add_edge("refine", "retrieve")
     
-    # Conditional edge from generate
     workflow.add_conditional_edges(
         "generate",
         should_iterate,
@@ -265,17 +307,14 @@ def build_traffic_law_graph():
         }
     )
     
-    # End from clarify
     workflow.add_edge("clarify", END)
     
-    # Compile with checkpointing
     memory = MemorySaver()
     app = workflow.compile(checkpointer=memory)
     
     print("✓ LangGraph workflow compiled successfully")
     
     return app
-
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -321,7 +360,8 @@ def main():
             "answer": "",
             "confidence": 0.0,
             "needs_clarification": False,
-            "iteration_count": 0
+            "iteration_count": 0,
+            "query_type": ""   
         }
         
         # Run graph
