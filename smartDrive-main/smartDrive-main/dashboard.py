@@ -1379,9 +1379,12 @@ if st.session_state.processing and st.session_state.pending_query:
         "sources_count": sources_count
     })
 
-    # Clear the composer input so the textarea resets after an answer
+    # Clear the composer input so the textarea resets after an answer.
+    # Set both the value and a flag `clear_user_input` so earlier render
+    # logic can reliably pick up the intent to clear the textarea.
     try:
         st.session_state["user_input"] = ""
+        st.session_state["clear_user_input"] = True
     except Exception:
         # If session state isn't available for any reason, continue gracefully
         pass
