@@ -826,7 +826,7 @@ section[data-testid="stSidebar"]{
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 50px !important;
+        border-radius: 10px !important;
         color: black !important;
         font-size: 1.2rem !important;
         padding: 0.95rem !important;
@@ -1152,6 +1152,12 @@ if "quick_prompt" in st.session_state:
     del st.session_state.quick_prompt
 
 
+# -------------------- DEBUG: Print session state and composer value --------------------
+
+# Log session state and composer value to a file for debug
+with open("/workspaces/smartDrive/smartDrive-main/smartDrive-main/session_debug.log", "a") as f:
+    f.write(f"[DEBUG] st.session_state: {dict(st.session_state)}\n")
+    f.write(f"[DEBUG] user_input value: {st.session_state.get('user_input')}\n")
 # -------------------- BOTTOM COMPOSER (INPUT + FOOTER) --------------------
 # ... header + supported strip + render_chat above ...
 
