@@ -1379,6 +1379,13 @@ if st.session_state.processing and st.session_state.pending_query:
         "sources_count": sources_count
     })
 
+    # Clear the composer input so the textarea resets after an answer
+    try:
+        st.session_state["user_input"] = ""
+    except Exception:
+        # If session state isn't available for any reason, continue gracefully
+        pass
+
     st.session_state.processing = False
     st.session_state.pending_query = None
     st.session_state.thinking_rendered = False
