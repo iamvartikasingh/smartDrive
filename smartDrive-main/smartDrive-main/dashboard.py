@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 # Inject Material Icons / Material Symbols so ligature text like
-# "<" renders as an icon instead of raw text.
+# "keyboard_double_arrow_right" renders as an icon instead of raw text.
 try:
     st.markdown(
         """
@@ -665,7 +665,7 @@ section[data-testid="stSidebar"]{
 
     .chat-subtitle {
         color: var(--text-mid);
-        font-size: 1rem;
+        font-size: 1.2rem;
     }
 
     .supported-strip {
@@ -775,7 +775,7 @@ section[data-testid="stSidebar"]{
 
     .user-message,
     .ai-message {
-        font-size: 1rem;
+        font-size: 1.2rem;
         line-height: 1.6;
     }
 
@@ -825,9 +825,9 @@ section[data-testid="stSidebar"]{
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 10px !important;
+        border-radius: 50px !important;
         color: black !important;
-        font-size: 1rem !important;
+        font-size: 1.2rem !important;
         padding: 0.95rem !important;
         caret-color: var(--teal) !important;
     }
@@ -1075,41 +1075,12 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-def get_meta(message: dict):
-    # Support BOTH:
-    # 1) new shape: message["metadata"] = {...}
-    # 2) old shape: message["sources_count"] etc at top-level
-            md = message.get("metadata")
-            if isinstance(md, dict):
-               return md
-
-            return {
-                "sources_count": message.get("sources_count", 0),
-                "response_time": message.get("response_time", 0.0),
-                "jurisdiction": message.get("jurisdiction", "All"),
-                "out_of_scope": message.get("out_of_scope", False),
-                "is_thinking": message.get("is_thinking", False),
-            }
-def assistant_msg(content: str, sources_count=0, response_time=0.0, jurisdiction="All",
-                  out_of_scope=False, is_thinking=False):
-    return {
-        "role": "assistant",
-        "content": content,
-        "metadata": {
-            "sources_count": int(sources_count),
-            "response_time": float(response_time),
-            "jurisdiction": jurisdiction,
-            "out_of_scope": bool(out_of_scope),
-            "is_thinking": bool(is_thinking),
-        }
-    }
 # -------------------- CHAT WINDOW --------------------
 def render_chat(messages):
     for message in messages:
         role = message.get("role")
         raw_content = message.get("content", "")
-        # metadata = message.get("metadata", {})
-        metadata = get_meta(message)
+        metadata = message.get("metadata", {})
 
         clean = sanitize_text(raw_content)
         content = html.escape(clean).replace("\n", "<br/>")
@@ -1243,14 +1214,17 @@ if st.session_state.processing and st.session_state.pending_query:
 
     # Phase 2: render a visible thinking bubble
     if not st.session_state.thinking_rendered:
-        st.session_state.messages[-1] = assistant_msg(
-            answer_text,
-            sources_count=sources_count,
-            response_time=response_time,
-            jurisdiction=jur,
-            out_of_scope=False,
-            is_thinking=False
-        )
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": "⏳ Please wait… I’m checking this.",
+            "metadata": {
+                "sources_count": 0,
+                "response_time": 0.0,
+                "jurisdiction": "N/A",
+                "out_of_scope": False,
+                "is_thinking": True
+            }
+        })
         st.session_state.thinking_rendered = True
         st.rerun()
 
@@ -1275,15 +1249,17 @@ if st.session_state.processing and st.session_state.pending_query:
 
             # replace last thinking msg
             if st.session_state.messages and st.session_state.messages[-1].get("metadata", {}).get("is_thinking"):
-                st.session_state.messages[-1] = assistant_msg(
-                    oos_text,
-                    sources_count=0,
-                    response_time=0.0,
-                    jurisdiction="N/A",
-                    out_of_scope=True,
-                     is_thinking=False
-                )
-                
+                st.session_state.messages[-1] = {
+                    "role": "assistant",
+                    "content": block_text,
+                    "metadata": {
+                        "sources_count": 0,
+                        "response_time": 0.0,
+                        "jurisdiction": "N/A",
+                        "out_of_scope": True,
+                        "is_thinking": False
+                    }
+                }
             else:
                 st.session_state.messages.append({
                     "role": "assistant",
