@@ -1,3 +1,48 @@
+# DriveSmart — Streamlit App
+
+This repository contains the DriveSmart Streamlit application. The app uses LangChain, ChromaDB, and OpenAI/Anthropic providers to answer traffic-law questions.
+
+## Deploy to Streamlit Cloud (recommended)
+
+1. Push this repository to GitHub (already configured if you see `origin`).
+
+2. Go to https://streamlit.io/cloud and sign in with GitHub.
+
+3. Click **New app** → Select the `iamvartikasingh/smartDrive` repo and the `main` branch.
+
+4. For **Main file**, set `dashboard.py` (located at the repo root in the selected branch).
+
+5. Add Secrets: In the Streamlit Cloud app settings, add the following secrets (do NOT commit these to git):
+
+```
+OPENAI_API_KEY=your_openai_key
+CHROMA_API_KEY=your_chroma_key
+CHROMA_TENANT=your_chroma_tenant
+CHROMA_DB=your_chroma_database
+# optional provider keys (Anthropic etc.)
+```
+
+6. Deploy. Monitor the build logs — Streamlit Cloud will install packages from `requirements.txt`.
+
+## Local testing with Docker (optional)
+
+Build and run locally:
+
+```
+docker build -t drivesmart:latest .
+docker run --env-file SmartDrive/.env -p 8501:8501 drivesmart:latest
+```
+
+## Notes
+- Do not commit real API keys. Use Streamlit Cloud secrets or environment variables.
+- If the build on Streamlit Cloud fails, open the logs and paste them here; I can help fix dependency issues.
+
+For help with any step I can:
+- Walk you through adding secrets in Streamlit Cloud
+- Triage build failures from logs
+- Create a Docker image and test locally
+
+Happy to continue — tell me which step you'd like me to complete or help with next.
 # 🚗 DriveSmart AI - Secure Traffic Law Assistant
 
 <div align="center">
