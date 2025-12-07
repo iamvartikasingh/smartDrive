@@ -47,20 +47,26 @@ sys.path.append(str(ROOT))
 sys.path.append(str(ROOT / "SmartDrive"))
 
 # -------------------- SECURITY MODULES --------------------
+# Be defensive: catch any exception during imports (KeyError can occur
+# inside import machinery in some environments). We don't want the app
+# to crash before rendering static UI like the intro image.
 try:
     from SmartDrive.security.input_validator import PromptSecurityValidator
     from SmartDrive.security.output_validator import ResponseValidator
     from SmartDrive.security.behavioral_monitor import BehavioralMonitor
     SECURITY_ENABLED = True
-except ImportError:
+except Exception:
     SECURITY_ENABLED = False
 
 # -------------------- CORE MODULES --------------------
+# Defensive import: catch any Exception (not just ImportError) so the
+# app can continue rendering static UI even if package imports fail
+# inside the Streamlit Cloud import system.
 try:
     from SmartDrive.src.refined_prompts import RefinedDriveSmartWorkflow
     from SmartDrive.src.vector_store import CloudTrafficLawVectorStore
     MODULES_LOADED = True
-except ImportError:
+except Exception:
     MODULES_LOADED = False
 
 # -------------------- PAGE CONFIG --------------------
