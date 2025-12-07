@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 # Inject Material Icons / Material Symbols so ligature text like
-# "<" renders as an icon instead of raw text.
+# "keyboard_double_arrow_right" renders as an icon instead of raw text.
 try:
     st.markdown(
         """
@@ -665,7 +665,7 @@ section[data-testid="stSidebar"]{
 
     .chat-subtitle {
         color: var(--text-mid);
-        font-size: 1rem;
+        font-size: 1.2rem;
     }
 
     .supported-strip {
@@ -775,7 +775,7 @@ section[data-testid="stSidebar"]{
 
     .user-message,
     .ai-message {
-        font-size: 1rem;
+        font-size: 1.2rem;
         line-height: 1.6;
     }
 
@@ -825,9 +825,9 @@ section[data-testid="stSidebar"]{
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 10px !important;
+        border-radius: 50px !important;
         color: black !important;
-        font-size: 1rem !important;
+        font-size: 1.2rem !important;
         padding: 0.95rem !important;
         caret-color: var(--teal) !important;
     }
