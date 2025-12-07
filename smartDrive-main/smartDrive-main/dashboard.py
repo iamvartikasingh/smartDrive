@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 # Inject Material Icons / Material Symbols so ligature text like
-# "keyboard_double_arrow_right" renders as an icon instead of raw text.
+# "<" renders as an icon instead of raw text.
 try:
     st.markdown(
         """
