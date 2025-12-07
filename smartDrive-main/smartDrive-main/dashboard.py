@@ -665,7 +665,7 @@ section[data-testid="stSidebar"]{
 
     .chat-subtitle {
         color: var(--text-mid);
-        font-size: 1.2rem;
+        font-size: 1.1rem;
     }
 
     .supported-strip {
@@ -775,7 +775,7 @@ section[data-testid="stSidebar"]{
 
     .user-message,
     .ai-message {
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         line-height: 1.6;
     }
 
@@ -827,7 +827,7 @@ section[data-testid="stSidebar"]{
         border: 1px solid var(--border-1) !important;
         border-radius: 10px !important;
         color: black !important;
-        font-size: 1.2rem !important;
+        font-size: 1.1rem !important;
         padding: 0.95rem !important;
         caret-color: var(--teal) !important;
     }
