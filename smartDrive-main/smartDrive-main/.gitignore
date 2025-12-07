@@ -1,3 +1,16 @@
+/.venv
+SmartDrive/.env
+__pycache__
+*.pyc
+.pytest_cache
+.vscode
+env/
+venv/
+dist/
+build/
+.DS_Store
+*.egg-info
+/.mypy_cache
 # DriveSmart AI - .gitignore
 # Prevents sensitive data and unnecessary files from being committed to GitHub
 

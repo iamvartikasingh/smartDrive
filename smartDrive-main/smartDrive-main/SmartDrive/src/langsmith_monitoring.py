@@ -23,7 +23,17 @@ os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 
 # LangChain imports
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_chroma import Chroma
+# Chroma import: try modular package, then consolidated langchain
+try:
+    from langchain_chroma import Chroma
+except Exception:
+    try:
+        from langchain.vectorstores import Chroma
+    except Exception:
+        try:
+            from langchain.vectorstores.chroma import Chroma
+        except Exception:
+            Chroma = None
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough

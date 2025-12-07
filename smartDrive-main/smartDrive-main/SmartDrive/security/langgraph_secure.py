@@ -21,7 +21,17 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_chroma import Chroma
+# Chroma import: try modular package, then consolidated langchain
+try:
+    from langchain_chroma import Chroma
+except Exception:
+    try:
+        from langchain.vectorstores import Chroma
+    except Exception:
+        try:
+            from langchain.vectorstores.chroma import Chroma
+        except Exception:
+            Chroma = None
 import chromadb
 
 # Security imports

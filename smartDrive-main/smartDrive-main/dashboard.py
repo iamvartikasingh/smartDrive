@@ -18,10 +18,7 @@ import html
 import json
 import base64
 
-def img_to_base64(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
-BG_B64 = img_to_base64("bg.png")
+
 # -------------------- ENV LOADER --------------------
 def load_env():
     candidates = [
@@ -38,6 +35,9 @@ def load_env():
     return None
 
 load_env()
+
+# Background image base64 (optional). Use env var `BG_B64` if provided, else empty.
+BG_B64 = os.getenv("BG_B64", "") or ""
 
 # -------------------- PATH SETUP --------------------
 ROOT = Path(__file__).resolve().parent
@@ -377,42 +377,36 @@ def get_vectorstore():
     vsm = CloudTrafficLawVectorStore()
     return vsm.get_existing_vectorstore("traffic_laws")
 
+
 @st.cache_resource
 def get_workflow():
-    init_params = list(inspect.signature(RefinedDriveSmartWorkflow.__init__).parameters)
+    try:
+        from SmartDrive.src.refined_prompts import RefinedDriveSmartWorkflow
+        from SmartDrive.src.vector_store import CloudTrafficLawVectorStore
+    except Exception as e:
+        st.error(f"❌ Could not load DriveSmart core modules: {e}")
+        return None
 
-    if len(init_params) <= 1:
-        return RefinedDriveSmartWorkflow()
+    try:
+        init_params = list(inspect.signature(RefinedDriveSmartWorkflow.__init__).parameters)
 
-    vectorstore = get_vectorstore()
-    return RefinedDriveSmartWorkflow(vectorstore)
+        if len(init_params) <= 1:
+            return RefinedDriveSmartWorkflow()
 
+        vsm = CloudTrafficLawVectorStore()
+        vectorstore = vsm.get_existing_vectorstore("traffic_laws")
+        return RefinedDriveSmartWorkflow(vectorstore)
+
+    except Exception as e:
+        st.error(f"❌ Failed to initialize workflow: {e}")
+        return None
 db_manager, input_validator, output_validator, behavioral_monitor = get_managers()
 workflow = get_workflow()
+if not workflow:
+    st.stop()
 supported_states = db_manager.get_supported_jurisdictions()
-st.markdown(f"""
-<style>
-.stApp {{
-    background:
-        /* SUPER DARK overlay */
-        linear-gradient(
-            180deg,
-            rgba(0,0,0,0.88),
-            rgba(0,0,0,0.92)
-        ),
-        /* subtle tech tint */
-        radial-gradient(circle at 12% 12%, rgba(59,151,151,0.10), transparent 38%),
-        radial-gradient(circle at 88% 20%, rgba(22,71,106,0.10), transparent 42%),
-        radial-gradient(circle at 40% 90%, rgba(191,9,47,0.06), transparent 45%),
-        /* your bg image */
-        url('data:image/png;base64,{BG_B64}');
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-}}
-</style>
-""", unsafe_allow_html=True)
+
+
 # -------------------- MODERN CSS --------------------
 st.markdown("""
 <style>
@@ -441,6 +435,7 @@ st.markdown("""
 
         --shadow-soft: 0 8px 28px rgba(0,0,0,0.35);
         --shadow-pop: 0 10px 30px rgba(0,0,0,0.45);
+        --base-font-size: 13px;
     }
 /* Import Poppins */
 section[data-testid="stSidebar"] div[data-testid="stButton"]:has(button):has(span:contains("Clear Chat History")) button{
@@ -468,6 +463,11 @@ section[data-testid="stSidebar"] button[aria-label="🗑️ Clear Chat History"]
 /* Apply globally */
 html, body, [class*="st-"], .stApp, .stMarkdown, .stTextArea, .stButton, input, textarea, button {
     font-family: "Poppins", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+/* Reduce global font size for denser layout */
+html, body, .stApp, .stMarkdown {
+    font-size: var(--base-font-size) !important;
 }
 
 /* Ensure your custom header text also uses Poppins */
@@ -516,7 +516,7 @@ header[data-testid="stHeader"]::after{
     content: "Ask DriveSmartAi";
     color: #FFFFFF;
     font-weight: 700;
-    font-size: 1.05rem;
+    font-size: 0.95rem;
     letter-spacing: 0.3px;
 
     position: absolute;

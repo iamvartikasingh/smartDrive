@@ -24,8 +24,17 @@ import chromadb
 # Text processing
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Vector store
-from langchain_chroma import Chroma
+# Vector store (try modular, then consolidated langchain, otherwise leave None)
+try:
+    from langchain_chroma import Chroma
+except Exception:
+    try:
+        from langchain.vectorstores import Chroma
+    except Exception:
+        try:
+            from langchain.vectorstores.chroma import Chroma
+        except Exception:
+            Chroma = None
 
 # Embeddings - OpenAI text-embedding-3-small
 from langchain_openai import OpenAIEmbeddings
@@ -81,27 +90,24 @@ def extract_jurisdictions(text: str) -> List[str]:
     return out
 # Load from src/.env file
 env_path = Path(__file__).parent.parent / ".env"
-print(env_path)
 if env_path.exists():
-    load_dotenv(env_path,override=True)
-    # print(f"✓ Loaded environment from: {env_path}")
+    load_dotenv(env_path, override=True)
 else:
-    print(f"⚠ Warning: {env_path} not found, using system environment variables")
-load_dotenv()
+    # fall back to system env; do not raise here to avoid import-time crashes
+    load_dotenv()
 
-# Verify all required keys are present
+# Check presence of keys but don't raise at import-time; runtime will handle missing creds
 REQUIRED_ENV_VARS = [
     "CHROMA_API_KEY",
-    "CHROMA_TENANT", 
+    "CHROMA_TENANT",
     "CHROMA_DB",
     "OPENAI_API_KEY"
 ]
 
 missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 if missing_vars:
-    raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}\nCheck your src/.env file")
-
-print("✓ All required environment variables loaded")
+    # Use a warning-style print (non-sensitive) so imports don't fail in dev environments
+    print(f"⚠ Warning: Missing environment variables: {', '.join(missing_vars)}. Vector store will be disabled until configured.")
 
 # ============================================================================
 # CLOUD CHROMADB VECTOR STORE
@@ -111,34 +117,38 @@ class CloudTrafficLawVectorStore:
     """Manages Cloud ChromaDB vector store for traffic laws"""
     
     def __init__(self):
-        #load all keys from env :
-        # env_path = Path(__file__).parent.parent/'src'/'.env'
-        # print(env_path)
-        # if env_path.exists():
-        # load_dotenv()
-        print(f"OPENAI_API_KEY from env: {os.getenv('OPENAI_API_KEY')}")
-        print(f"Length: {len(os.getenv('OPENAI_API_KEY') or '')}")
-        
-        apikey=os.getenv("OPENAI_API_KEY")
-        print("openai api key -  ",apikey)
-        print("Type : ",type(apikey))
-        self.embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=apikey        
-        )
-        print("self embeddings - ",self.embeddings)
-        # Connect to ChromaDB Cloud
-        self.chroma_client = chromadb.CloudClient(
-            api_key=os.getenv("CHROMA_API_KEY"),
-            tenant=os.getenv("CHROMA_TENANT"),
-            database=os.getenv("CHROMA_DB")
-        )
-        
-        print(f"✓ Connected to ChromaDB Cloud")
-        print(f"  Tenant: {os.getenv('CHROMA_TENANT')}")
-        print(f"  Database: {os.getenv('CHROMA_DB')}")
-        
+        # Initialize attributes to safe defaults
+        self.embeddings = None
+        self.chroma_client = None
         self.vectorstore = None
+        self.db_connected = False
+
+        try:
+            apikey = os.getenv("OPENAI_API_KEY")
+            if not apikey:
+                raise RuntimeError("OPENAI_API_KEY not set")
+
+            # Initialize embeddings (do not print secrets)
+            self.embeddings = OpenAIEmbeddings(
+                model="text-embedding-3-small",
+                api_key=apikey
+            )
+
+            # Connect to ChromaDB Cloud (may raise on bad config)
+            self.chroma_client = chromadb.CloudClient(
+                api_key=os.getenv("CHROMA_API_KEY"),
+                tenant=os.getenv("CHROMA_TENANT"),
+                database=os.getenv("CHROMA_DB")
+            )
+
+            self.db_connected = True
+        except Exception as e:
+            # Avoid leaking secrets in logs; provide a short non-sensitive warning
+            print(f"⚠ CloudTrafficLawVectorStore: initialization failed ({e}). Vector operations will be disabled.")
+            self.embeddings = None
+            self.chroma_client = None
+            self.vectorstore = None
+            self.db_connected = False
     
     def load_data(self, csv_file):
         print("Data file path- ",csv_file)

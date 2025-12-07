@@ -13,12 +13,157 @@ import time
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path, override=True)
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_chroma import Chroma
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableParallel, RunnablePassthrough
-import chromadb
+# The project targets the newer modular langchain packages (e.g. `langchain_openai`,
+# `langchain_chroma`, `langchain_core`). Some environments instead use the
+# consolidated `langchain` package. Try the modular imports first and fall
+# back to the consolidated package to maximize compatibility.
+try:
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_chroma import Chroma
+    from langchain_core.prompts import PromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.runnables import RunnableParallel, RunnablePassthrough
+    import chromadb
+except Exception:
+    # Fallback to the consolidated `langchain` package layout (best-effort).
+    try:
+        # Use the consolidated langchain helpers where available
+        from langchain.chat_models import init_chat_model
+        try:
+            from langchain.embeddings import init_embeddings
+        except Exception:
+            # Older layouts may expose provider-specific embeddings modules
+            try:
+                from langchain.embeddings.openai import OpenAIEmbeddings
+            except Exception:
+                init_embeddings = None
+
+        # Vectorstore/chroma wrapper may or may not be present
+        try:
+            from langchain.vectorstores import Chroma
+        except Exception:
+            try:
+                from langchain.vectorstores.chroma import Chroma
+            except Exception:
+                Chroma = None
+
+        try:
+            from langchain.prompts import PromptTemplate
+        except Exception:
+            PromptTemplate = None
+
+        try:
+            from langchain.output_parsers import StrOutputParser
+        except Exception:
+            StrOutputParser = None
+        # Runnable APIs may be in different places; attempt common locations
+        try:
+            from langchain.runnables import RunnableParallel, RunnablePassthrough
+        except Exception:
+            # If not available, provide very small local fallbacks below (used only for import compatibility)
+            class RunnableParallel:
+                def __init__(self, x):
+                    raise ImportError("RunnableParallel not available in this langchain installation")
+
+            class RunnablePassthrough:
+                pass
+
+        import chromadb
+    except Exception as e:
+        # Re-raise a clearer message so callers (and the dashboard) can surface it.
+        raise ImportError(
+            "Failed to import LangChain modules. Install either the modular "
+            "`langchain_openai/langchain_chroma/langchain_core` packages or the "
+            "consolidated `langchain` package. Original error: %s" % e
+        )
+
+# --- Helper initializers for environments with different langchain distributions ---
+def _init_chat_model_fallback(model_name: str = "gpt-4o", api_key: str | None = None):
+    """Return a chat model instance compatible with the minimal interface used below.
+
+    Prefers `ChatOpenAI` if present; otherwise uses `langchain.chat_models.init_chat_model`.
+    The returned object is expected to implement `invoke(prompt_str)`.
+    """
+    # If ChatOpenAI is available (modular import), use it
+    try:
+        if 'ChatOpenAI' in globals():
+            if api_key:
+                return ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
+            return ChatOpenAI(model=model_name, temperature=0)
+    except Exception:
+        pass
+
+    # Otherwise use the consolidated langchain init_chat_model helper
+    try:
+        from langchain.chat_models import init_chat_model
+        # specify provider via model string if appropriate
+        return init_chat_model(model_name, temperature=0)
+    except Exception:
+        raise ImportError("No compatible chat model implementation available; install a LangChain provider integration (e.g. langchain-openai)")
+
+
+def _init_embeddings_fallback(model_name: str = "text-embedding-3-small", api_key: str | None = None):
+    """Return an embeddings object with a `embed(text: str) -> list[float]` method.
+
+    Prefers `OpenAIEmbeddings` if available; otherwise uses `langchain.embeddings.init_embeddings`.
+    """
+    try:
+        if 'OpenAIEmbeddings' in globals():
+            if api_key:
+                return OpenAIEmbeddings(model=model_name, api_key=api_key)
+            return OpenAIEmbeddings(model=model_name)
+    except Exception:
+        pass
+
+    try:
+        from langchain.embeddings import init_embeddings
+        return init_embeddings(model_name)
+    except Exception:
+        raise ImportError("No compatible embeddings implementation available; install a LangChain embeddings provider integration (e.g. langchain-openai)")
+
+
+class _SimpleChromaRetriever:
+    """Minimal retriever wrapper around a `chromadb` collection.
+
+    This provides `get_docs(query,k)` which returns list of simple objects with
+    `page_content` and `metadata` attributes used by the workflow.
+    """
+    def __init__(self, chroma_client, collection_name: str = "traffic_laws", embedding_fn=None):
+        self.client = chroma_client
+        self.collection = None
+        try:
+            self.collection = chroma_client.get_collection(collection_name)
+        except Exception:
+            # some clients require creating or fetching differently
+            try:
+                self.collection = chroma_client.get(collection_name)
+            except Exception:
+                self.collection = None
+        self.embedding_fn = embedding_fn
+
+    def get_docs(self, query: str, k: int = 3):
+        if not self.collection:
+            return []
+
+        # Prefer text query; chromadb will handle text->embedding server-side if supported
+        try:
+            qr = self.collection.query(query_texts=[query], n_results=k, include=["documents", "metadatas"]) or {}
+            docs = []
+            documents = qr.get('documents', [[]])[0]
+            metadatas = qr.get('metadatas', [[]])[0]
+
+            for d, m in zip(documents, metadatas):
+                class Doc:
+                    pass
+
+                doc = Doc()
+                doc.page_content = d
+                doc.metadata = m or {}
+                docs.append(doc)
+
+            return docs
+        except Exception:
+            return []
 
 # ============================================================================
 # ORIGINAL PROMPTS (Before Optimization)
@@ -145,40 +290,44 @@ class RefinedDriveSmartWorkflow:
     def __init__(self):
         # Get API key properly
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        
+
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found")
-        
-        # print(f"✓ API Key loaded: {api_key[:20]}...")
-        
-        # Initialize LLM
-        self.llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0,
-            api_key=api_key
-        )
-        
-        # Initialize embeddings
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=api_key
-        )
-        
-        # Connect to ChromaDB
-        chroma_client = chromadb.CloudClient(
-            api_key=os.getenv("CHROMA_API_KEY"),
-            tenant=os.getenv("CHROMA_TENANT"),
-            database=os.getenv("CHROMA_DB")
-        )
-        
-        vectorstore = Chroma(
-            client=chroma_client,
-            collection_name="traffic_laws",
-            embedding_function=embeddings
-        )
-        
-        self.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        
+
+        try:
+            self.llm = _init_chat_model_fallback("gpt-4o", api_key=api_key)
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize chat model: {e}")
+
+        try:
+            self.embeddings = _init_embeddings_fallback("text-embedding-3-small", api_key=api_key)
+        except Exception as e:
+            self.embeddings = None
+
+        try:
+            chroma_client = chromadb.CloudClient(
+                api_key=os.getenv("CHROMA_API_KEY"),
+                tenant=os.getenv("CHROMA_TENANT"),
+                database=os.getenv("CHROMA_DB")
+            )
+        except Exception:
+            try:
+                chroma_client = chromadb.Client()
+            except Exception:
+                chroma_client = None
+
+        try:
+            if 'Chroma' in globals() and chroma_client is not None:
+                vectorstore = Chroma(client=chroma_client, collection_name="traffic_laws", embedding_function=self.embeddings)
+                try:
+                    self.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+                except Exception:
+                    self.retriever = _SimpleChromaRetriever(chroma_client, "traffic_laws", embedding_fn=self.embeddings)
+            else:
+                self.retriever = _SimpleChromaRetriever(chroma_client, "traffic_laws", embedding_fn=self.embeddings)
+        except Exception:
+            self.retriever = _SimpleChromaRetriever(chroma_client, "traffic_laws", embedding_fn=self.embeddings)
+
         print("✓ Refined workflow initialized")
     
     def format_docs(self, docs):
@@ -188,32 +337,59 @@ class RefinedDriveSmartWorkflow:
     def query_with_prompt(self, question: str, prompt_template: str, 
                           input_var: str = "question"):
         """Query using specific prompt template"""
-        
-        prompt = PromptTemplate(
-            input_variables=["context", input_var],
-            template=prompt_template
-        )
-        
-        chain = RunnableParallel({
-            "context": self.retriever,
-            input_var: RunnablePassthrough()
-        }).assign(
-            answer=lambda x: (
-                prompt
-                | self.llm
-                | StrOutputParser()
-            ).invoke({
-                "context": self.format_docs(x["context"]),
-                input_var: x[input_var]
-            }),
-            sources=lambda x: x["context"]
-        )
-        
-        result = chain.invoke(question)
-        
+        try:
+            prompt_t = PromptTemplate(input_variables=["context", input_var], template=prompt_template)
+            use_template = True
+        except Exception:
+            use_template = False
+
+        sources = []
+        try:
+            if hasattr(self.retriever, 'get_docs'):
+                docs = self.retriever.get_docs(question, k=3)
+                sources = docs
+            else:
+                try:
+                    docs = self.retriever(question)
+                    sources = docs
+                except Exception:
+                    try:
+                        docs = self.retriever.get_relevant_documents(question)
+                        sources = docs
+                    except Exception:
+                        sources = []
+        except Exception:
+            sources = []
+
+        context_text = self.format_docs(sources)
+
+        if use_template:
+            prompt_text = prompt_t.format(context=context_text, **{input_var: question})
+        else:
+            prompt_text = prompt_template.replace("{context}", context_text).replace("{" + input_var + "}", question)
+
+        try:
+            if hasattr(self.llm, 'invoke'):
+                answer = self.llm.invoke(prompt_text)
+            elif hasattr(self.llm, '__call__'):
+                answer = self.llm(prompt_text)
+            else:
+                answer = getattr(self.llm, 'generate', lambda *a, **k: None)([prompt_text])
+
+            if isinstance(answer, dict) and 'text' in answer:
+                final_text = answer['text']
+            elif hasattr(answer, 'content'):
+                final_text = getattr(answer, 'content')
+            elif isinstance(answer, list) and answer:
+                final_text = str(answer[0])
+            else:
+                final_text = str(answer)
+        except Exception as e:
+            final_text = f"(LLM error: {e})"
+
         return {
-            'answer': result['answer'],
-            'sources': result['sources']
+            'answer': final_text,
+            'sources': sources
         }
     def query(self, question: str, prompt_type_key: str = "general"):
         """
