@@ -41,7 +41,10 @@ BG_B64 = os.getenv("BG_B64", "") or ""
 
 # -------------------- PATH SETUP --------------------
 ROOT = Path(__file__).resolve().parent
-sys.path.append(str(ROOT / "SmartDrive" / "src"))
+# Ensure repository root and package directories are on sys.path so
+# `import SmartDrive...` works both locally and on Streamlit Cloud.
+sys.path.append(str(ROOT))
+sys.path.append(str(ROOT / "SmartDrive"))
 
 # -------------------- SECURITY MODULES --------------------
 try:
