@@ -825,7 +825,7 @@ section[data-testid="stSidebar"]{
     .stTextArea textarea {
         background: rgba(255,255,255,0.06) !important;
         border: 1px solid var(--border-1) !important;
-        border-radius: 50px !important;
+        border-radius: 10px !important;
         color: black !important;
         font-size: 1.2rem !important;
         padding: 0.95rem !important;
