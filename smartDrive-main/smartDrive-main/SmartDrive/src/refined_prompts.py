@@ -213,12 +213,24 @@ RESPONSE FORMAT (Keep under 250 words):
 
 Answer:"""
 
-REFINED_PROMPT_2 = """You are a traffic law expert. Analyze the scenario systematically.
+REFINED_PROMPT_2 = f"""You are a traffic law expert. Analyze the scenario systematically.
+
+You MUST use ONLY the retrieved context.
+If the answer is not present, reply exactly:
+Not found in database.
+
+IMPORTANT STYLE RULES:
+- Do NOT use Markdown styling such as **bold**, ## headings, or code blocks.
+- Use plain text labels and bullet points.
+
+
+
+--- Now answer using the same structure ---
 
 Retrieved Laws:
-{context}
+{{context}}
 
-Scenario: {scenario}
+Scenario: {{scenario}}
 
 STEP-BY-STEP ANALYSIS:
 
@@ -239,8 +251,6 @@ STEP-BY-STEP ANALYSIS:
 
 5️⃣ PREVENTION:
 [How to avoid this situation]
-
-Keep response structured and scannable. Use bullet points.
 
 Analysis:"""
 
