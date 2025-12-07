@@ -286,8 +286,43 @@ class DatabaseManager:
             # If path is a file path or cannot be created, fall back to tempfile.gettempdir()
             db_dir = tempfile.gettempdir()
         self.sqlite_path = str(Path(db_dir) / 'drivesmart_analytics.db')
-        self.sqlite_conn = sqlite3.connect(self.sqlite_path, check_same_thread=False)
-        self._init_sqlite_tables()
+
+        # Connect with a timeout to reduce "database is locked" OperationalErrors
+        try:
+            self.sqlite_conn = sqlite3.connect(self.sqlite_path, check_same_thread=False, timeout=30)
+            try:
+                # Improve concurrency characteristics
+                cur = self.sqlite_conn.cursor()
+                cur.execute("PRAGMA journal_mode=WAL;")
+                cur.execute("PRAGMA synchronous=NORMAL;")
+                cur.execute("PRAGMA temp_store=MEMORY;")
+            except Exception:
+                # If pragmas fail, continue — not fatal
+                pass
+            # Try to initialize tables; if it fails, we'll fallback to an in-memory DB
+            try:
+                self._init_sqlite_tables()
+            except sqlite3.OperationalError as e:
+                print(f"[DatabaseManager] _init_sqlite_tables OperationalError: {e}")
+                # Fallback to in-memory DB to keep app running
+                try:
+                    self.sqlite_conn = sqlite3.connect(':memory:', check_same_thread=False, timeout=30)
+                    self._init_sqlite_tables()
+                    self.sqlite_path = ':memory:'
+                except Exception as e2:
+                    print(f"[DatabaseManager] Failed to initialize in-memory DB: {e2}")
+                    # Disable analytics by setting sqlite_conn to None
+                    self.sqlite_conn = None
+        except Exception as e:
+            print(f"[DatabaseManager] Could not open SQLite DB at {self.sqlite_path}: {e}")
+            # Fallback to in-memory DB if possible
+            try:
+                self.sqlite_conn = sqlite3.connect(':memory:', check_same_thread=False, timeout=30)
+                self._init_sqlite_tables()
+                self.sqlite_path = ':memory:'
+            except Exception as e2:
+                print(f"[DatabaseManager] Could not open in-memory SQLite DB: {e2}")
+                self.sqlite_conn = None
 
     def _init_sqlite_tables(self):
         cursor = self.sqlite_conn.cursor()
@@ -306,37 +341,56 @@ class DatabaseManager:
         self.sqlite_conn.commit()
 
     def save_query(self, query_data):
+        if not self.sqlite_conn:
+            # Analytics disabled / DB not available
+            return None
+
         cursor = self.sqlite_conn.cursor()
-        try:
-            cursor.execute('''
+        sql = '''
                 INSERT INTO query_history 
                 (query, response, jurisdiction, analysis_type, response_time, sources_count)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                query_data.get('query', ''),
-                (query_data.get('response', '') or '')[:1000],
-                query_data.get('jurisdiction', 'All'),
-                query_data.get('analysis_type', 'general'),
-                float(query_data.get('response_time', 0.0)),
-                int(query_data.get('sources_count', 0))
-            ))
-            self.sqlite_conn.commit()
-            return cursor.lastrowid
-        except sqlite3.OperationalError as e:
-            # Log and surface a concise message without exposing sensitive details in the UI.
+            '''
+        params = (
+            query_data.get('query', ''),
+            (query_data.get('response', '') or '')[:1000],
+            query_data.get('jurisdiction', 'All'),
+            query_data.get('analysis_type', 'general'),
+            float(query_data.get('response_time', 0.0)),
+            int(query_data.get('sources_count', 0))
+        )
+
+        # Retry loop to handle transient "database is locked" errors
+        for attempt in range(3):
             try:
-                # Best-effort logging for Cloud logs
-                print(f"[DatabaseManager] OperationalError saving query to {getattr(self, 'sqlite_path', 'drivesmart_analytics.db')}: {e}")
-            except Exception:
-                pass
-            return None
-        except Exception as e:
-            # Generic catch-all to avoid crashing the app from analytics failures
-            try:
-                print(f"[DatabaseManager] Error saving query: {e}")
-            except Exception:
-                pass
-            return None
+                cursor.execute(sql, params)
+                self.sqlite_conn.commit()
+                return cursor.lastrowid
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                try:
+                    print(f"[DatabaseManager] OperationalError on save_query attempt {attempt+1}: {e}")
+                except Exception:
+                    pass
+                # If it's a lock, wait a bit and retry
+                if 'locked' in msg or 'database is locked' in msg:
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                # Otherwise, don't retry
+                return None
+            except Exception as e:
+                try:
+                    print(f"[DatabaseManager] Unexpected error saving query: {e}")
+                except Exception:
+                    pass
+                return None
+
+        # If we exhausted retries, surface a concise log and return
+        try:
+            print("[DatabaseManager] save_query failed after retries")
+        except Exception:
+            pass
+        return None
 
     def get_stats(self):
         cursor = self.sqlite_conn.cursor()
