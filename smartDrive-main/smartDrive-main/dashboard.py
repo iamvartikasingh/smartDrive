@@ -1120,26 +1120,6 @@ def render_chat(messages):
             )
 
 # ✅ Intro image only until the first user question
-render_chat(st.session_state.messages)
-
-has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
-
-if not has_user_message:
-    try:
-        # Use absolute path from the module root so Streamlit Cloud finds the file
-        img_path = ROOT / "intro.png"
-        if img_path.exists():
-            try:
-                st.image(str(img_path), width=500)
-            except Exception:
-                # If Streamlit fails to render the image for any reason, continue
-                pass
-        else:
-            # Intro image missing in deployment — skip gracefully
-            pass
-    except Exception:
-        # Defensive: do not allow any image-handling error to crash the app
-        pass
 
 # -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
 # This ensures the textarea shows the selected prompt on rerun
@@ -1319,6 +1299,8 @@ if st.session_state.processing and st.session_state.pending_query:
         st.session_state.thinking_rendered = False
         st.rerun()
 
+   
+
     # ---------------- PROMPT TYPE DETECTION ----------------
     q_lower = pending.lower()
     if "compare" in q_lower or "difference" in q_lower:
@@ -1392,3 +1374,24 @@ if st.session_state.processing and st.session_state.pending_query:
     st.session_state.pending_query = None
     st.session_state.thinking_rendered = False
     st.rerun()
+
+render_chat(st.session_state.messages)
+
+has_user_message = any(m.get("role") == "user" for m in st.session_state.messages)
+
+if not has_user_message:
+    try:
+        # Use absolute path from the module root so Streamlit Cloud finds the file
+        img_path = ROOT / "intro.png"
+        if img_path.exists():
+            try:
+                st.image(str(img_path), width=500)
+            except Exception:
+                # If Streamlit fails to render the image for any reason, continue
+                pass
+        else:
+            # Intro image missing in deployment — skip gracefully
+            pass
+    except Exception:
+        # Defensive: do not allow any image-handling error to crash the app
+        pass
