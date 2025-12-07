@@ -154,8 +154,7 @@ if "pending_query" not in st.session_state:
 
 if "thinking_rendered" not in st.session_state:
     st.session_state.thinking_rendered = False
-if "clear_user_input" not in st.session_state:
-    st.session_state.clear_user_input = False
+
 # -------------------- LEGACY HTML CLEANUP --------------------
 TAG_RE = re.compile(r"<[^>]+>")
 
@@ -1140,14 +1139,15 @@ if not has_user_message:
     except Exception:
         # Defensive: do not allow any image-handling error to crash the app
         pass
-if st.session_state.get("clear_user_input"):
-        st.session_state["user_input"] = ""
-        st.session_state.clear_user_input = False
+
 # -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
 # This ensures the textarea shows the selected prompt on rerun
 # -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
+# -------------------- QUICK PROMPT PREFILL (BEFORE COMPOSER) --------------------
+# Initialize default value for the text area
+default_value = ""
 if "quick_prompt" in st.session_state:
-    st.session_state["user_input"] = st.session_state.quick_prompt
+    default_value = st.session_state.quick_prompt
     st.session_state["auto_send"] = True
     del st.session_state.quick_prompt
 
@@ -1156,23 +1156,21 @@ if "quick_prompt" in st.session_state:
 # ... header + supported strip + render_chat above ...
 
 # Anchor right before composer
-st.markdown('<div id="composer-anchor"></div>', unsafe_allow_html=True)
-
-with st.container():
+# Anchor right before composer
+with st.form("composer_form", clear_on_submit=True):
     col1, col2 = st.columns([5, 1])
 
     with col1:
         user_input = st.text_area(
             "Ask a question",
+            value=default_value,  # ✅ Use value instead of key binding
             placeholder="Type your traffic law question here...",
-            key="user_input",
             height=90,
             label_visibility="collapsed"
         )
-
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        send_button = st.button("Ask Now", use_container_width=True, type="primary")
+        send_button = st.form_submit_button("Ask Now", use_container_width=True, type="primary")
 
     st.markdown("""
     <div class="composer-footer">
@@ -1180,7 +1178,6 @@ with st.container():
         Northeastern University - INFO 7375
     </div>
     """, unsafe_allow_html=True)
-
 # -------------------- AUTO-SEND FOR QUICK PROMPTS --------------------
 if st.session_state.pop("auto_send", False):
     send_button = True
@@ -1191,11 +1188,15 @@ if st.session_state.pop("auto_send", False):
 if send_button and user_input and not st.session_state.processing:
     clean_user = sanitize_text(user_input)
 
-    # 1) show user message immediately on next rerun
     st.session_state.messages.append({
         "role": "user",
         "content": clean_user
     })
+
+    st.session_state.pending_query = clean_user
+    st.session_state.processing = True
+    st.session_state.thinking_rendered = False
+
 
     # 2) stash pending query for async-like UX
     st.session_state.pending_query = clean_user
