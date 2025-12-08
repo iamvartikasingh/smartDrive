@@ -212,6 +212,7 @@ RESPONSE FORMAT (Keep under 250 words):
 ⚠️ NOTE: [Any important exceptions or warnings]
 
 Answer:"""
+
 REFINED_PROMPT_2 = f"""You are a traffic law expert. Analyze the scenario systematically.
 
 You MUST use ONLY the retrieved context.
